@@ -1,0 +1,394 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>xss.b1nq | Official</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="admin-styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap" rel="stylesheet">
+</head>
+<body class="theme-dark">
+    <div id="site-loader" class="site-loader" aria-live="polite" aria-label="Загрузка сайта">
+        <div class="site-loader-card">
+            <div class="site-loader-logo">XB</div>
+            <h2 class="site-loader-title">xss.b1nq</h2>
+            <p class="site-loader-subtitle">Загрузка интерфейса...</p>
+            <div class="site-loader-track">
+                <span class="site-loader-bar"></span>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="space"></canvas>
+    
+    <!-- РљР°СЃС‚РѕРјРЅС‹Р№ РєСѓСЂСЃРѕСЂ -->
+    <div id="cursor-glow"></div>
+
+    <!-- Р Р•Р“РРЎРўР РђР¦РРћРќРќРђРЇ РџРђРќР•Р›Р¬ -->
+    <div id="auth-container" class="auth-container">
+    <div class="auth-content">
+        <div class="auth-header">
+            <h1>xss.b1nq</h1>
+            <p>Добро пожаловать</p>
+        </div>
+
+        <div id="user-register-form" class="auth-form active-form">
+            <h3>Регистрация</h3>
+            <div class="form-field">
+                <label>Ник</label>
+                <input type="text" id="user-register-nick" placeholder="Придумай ник" maxlength="20">
+            </div>
+            <div class="form-field">
+                <label>Пароль</label>
+                <input type="password" id="user-register-password" placeholder="Придумай пароль">
+            </div>
+            <div class="form-field">
+                <label>Подтверждение</label>
+                <input type="password" id="user-register-password-confirm" placeholder="Повтори пароль">
+            </div>
+            <button onclick="registerUser()" class="auth-btn">Зарегистрироваться</button>
+            <div class="auth-footer">
+                <p>Уже есть аккаунт? <button onclick="showUserLogin()" class="link-btn">Вход</button></p>
+                <p>Админ/модератор? <button onclick="showAdminLogin()" class="link-btn">Вход для состава</button></p>
+            </div>
+        </div>
+
+        <div id="user-login-form" class="auth-form">
+            <h3>Вход</h3>
+            <div class="form-field">
+                <label>Ник</label>
+                <input type="text" id="user-login-nick" placeholder="Введи ник">
+            </div>
+            <div class="form-field">
+                <label>Пароль</label>
+                <input type="password" id="user-login-password" placeholder="Введи пароль">
+            </div>
+            <button onclick="loginUser()" class="auth-btn">Войти</button>
+            <div class="auth-footer">
+                <p>Нет аккаунта? <button onclick="showUserRegister()" class="link-btn">Регистрация</button></p>
+                <p>Админ/модератор? <button onclick="showAdminLogin()" class="link-btn">Вход для состава</button></p>
+            </div>
+        </div>
+
+        <div id="admin-login-form" class="auth-form">
+            <h3>Вход админа и модератора</h3>
+            <div class="form-field">
+                <label>Роль</label>
+                <select id="staff-login-role">
+                    <option value="admin">Администратор</option>
+                    <option value="moderator">Модератор</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label>Ник</label>
+                <input type="text" id="staff-login-nick" placeholder="Введи ник состава">
+            </div>
+            <div class="form-field">
+                <label>Пароль</label>
+                <input type="password" id="staff-login-password" placeholder="Введи пароль">
+            </div>
+            <button onclick="loginStaff()" class="auth-btn admin-btn">Войти в панель</button>
+            <button onclick="showAdminRegister()" class="auth-btn register-btn">Создать аккаунт состава</button>
+            <div class="auth-footer">
+                <p><button onclick="showUserLogin()" class="link-btn">Войти как пользователь</button></p>
+            </div>
+        </div>
+
+        <div id="admin-register-form" class="auth-form">
+            <h3>Регистрация админа/модератора</h3>
+            <div class="form-field">
+                <label>Секретный код</label>
+                <input type="password" id="admin-secret-code" placeholder="Введи секретный код">
+            </div>
+            <div class="form-field">
+                <label>Роль</label>
+                <select id="new-staff-role">
+                    <option value="admin">Администратор</option>
+                    <option value="moderator">Модератор</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label>Ник</label>
+                <input type="text" id="new-admin-nick" placeholder="Введи ник состава" maxlength="20">
+            </div>
+            <div class="form-field">
+                <label>Пароль</label>
+                <input type="password" id="new-admin-password" placeholder="Введи пароль">
+            </div>
+            <div class="form-field">
+                <label>Подтверждение</label>
+                <input type="password" id="new-admin-password-confirm" placeholder="Повтори пароль">
+            </div>
+            <button onclick="createStaffAccount()" class="auth-btn admin-btn">Создать аккаунт</button>
+            <div class="auth-footer">
+                <p><button onclick="showAdminLogin()" class="link-btn">Вернуться ко входу состава</button></p>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="main-content" class="main-content" style="display: none;">
+
+    <div class="theme-switcher">
+        <button onclick="setTheme('light')" title="РЎРІРµС‚Р»Р°СЏ">вЂпёЏ</button>
+        <button onclick="setTheme('dark')" title="РўРµРјРЅР°СЏ">рџЊ™</button>
+        <button onclick="setTheme('neon')" title="РќРµРѕРЅ">рџ”®</button>
+        <button id="logout-account-btn" onclick="logoutAccount()" title="Выйти из аккаунта">🚪</button>
+    </div>
+
+    <div class="clocks-wrapper">
+        <div class="clock-item">
+            <div class="time" id="time-de">00:00:00</div>
+            <div class="label">Германия</div>
+        </div>
+        <div class="clock-item">
+            <div class="time" id="time-ua">00:00:00</div>
+            <div class="label">Украина</div>
+        </div>
+        <div class="clock-item">
+            <div class="time" id="time-ru">00:00:00</div>
+            <div class="label">Россия</div>
+        </div>
+    </div>
+
+    <main class="tg-app">
+        <div class="tg-header">
+            <div class="avatar-main">XB</div>
+            <div class="header-text">
+                <h2 id="profile-display-nick">xss.b1nq</h2>
+                <span class="status-online">в сети</span>
+            </div>
+        </div>
+        
+        <div class="chat-container">
+            <div class="chat-row" onclick="toggleSocialList()">
+                <div class="chat-avatar folder">📁</div>
+                <div class="chat-body">
+                    <div class="chat-top">
+                        <span class="chat-name">Мои соцсети</span>
+                        <span class="chat-time" id="folder-arrow">▾</span>
+                    </div>
+                    <div class="chat-msg">Нажми, чтобы увидеть список</div>
+                </div>
+            </div>
+
+            <div id="social-dropdown" class="dropdown-content">
+                <a href="https://t.me/SNUFK1N_SS" target="_blank" class="chat-row sub-item">
+                    <div class="chat-avatar tg-blue">TG</div>
+                    <div class="chat-body">
+                        <div class="chat-name">Telegram</div>
+                        <div class="chat-msg">@SNUFK1N_SS</div>
+                    </div>
+                </a>
+                <a href="https://www.instagram.com/xss.b1nq/" target="_blank" class="chat-row sub-item">
+                    <div class="chat-avatar ig-pink">IG</div>
+                    <div class="chat-body">
+                        <div class="chat-name">Instagram</div>
+                        <div class="chat-msg">@xss.b1nq</div>
+                    </div>
+                </a>
+            </div>
+
+            <div class="chat-row" onclick="toggleGame(true)">
+                <div class="chat-avatar game">🎮</div>
+                <div class="chat-body">
+                    <div class="chat-top">
+                        <span class="chat-name">Мини-игра</span>
+                        <span class="chat-time">Сейчас</span>
+                    </div>
+                    <div class="chat-msg">Избегай препятствий и набирай очки!</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="game-overlay">
+        <div class="game-window">
+            <div class="game-header">🎮 Мини-игра <button onclick="toggleGame(false)">✕</button></div>
+            <canvas id="gameCanvas" style="border-radius: 10px; background: linear-gradient(135deg, rgba(0, 22, 50, 0.9), rgba(0, 100, 150, 0.3)); width: 100%; height: 400px;"></canvas>
+            <div class="game-hint">Нажмите, чтобы начать</div>
+        </div>
+    </div>
+
+    <!-- Р‘РѕРєРѕРІРѕР№ С‡Р°С‚ -->
+    <div id="side-chat-panel" class="side-chat-panel">
+        <div class="side-chat-header" title="РќР°Р¶РјРё РґР»СЏ Р·Р°РєСЂС‹С‚РёСЏ">
+            <h3>рџ’¬ Р§Р°С‚</h3>
+            <button id="toggle-chat-btn" onclick="minimizeChat()" class="side-chat-close" style="font-size: 1.3rem;">вњ•</button>
+        </div>
+        <div id="side-auth-form" class="side-auth-form">
+            <input type="text" id="side-nickname-input" placeholder="Введи ник..." maxlength="20">
+            <button onclick="joinSideChat()">Войти</button>
+            <div style="font-size: 0.75rem; color: var(--hint); text-align: center; margin-top: 5px; opacity: 0.7;">⚠️ Ник нельзя менять!</div>
+        </div>
+        <div id="side-messages-container" class="side-messages-container" style="display: none;"></div>
+        <div id="side-user-panel" class="side-user-panel" style="display: none;">
+            <div class="side-user-info" id="side-user-info"></div>
+            <button onclick="changeNickname()" class="side-change-nick">Сменить ник</button>
+            <button onclick="exitSideChat()" class="side-exit-btn">Выход</button>
+        </div>
+        <div id="side-chat-input-area" class="side-chat-input-area" style="display: none;">
+            <input type="text" id="side-message-input" placeholder="Сообщение..." onkeypress="handleMessageKeyPress(event)">
+            <button onclick="sendMessageSideChat()">➤</button>
+            <div id="cooldown-timer" class="cooldown-timer" style="display: none;">⏱s</div>
+        </div>
+    </div>
+
+    <!-- РљРЅРѕРїРєР° РґР»СЏ РѕС‚РєСЂС‹С‚РёСЏ С‡Р°С‚Р° -->
+    <button id="open-chat-btn" class="open-chat-btn" onclick="openChat()" title="Открыть чат (Escape)">💬</button>
+
+    <!-- РњР°РіР°Р·РёРЅ -->
+    <div id="shop-panel" class="shop-panel">
+        <div class="shop-header">
+            <h3>🛍️ Магазин</h3>
+            <button id="toggle-shop-btn" onclick="closeShop()" class="shop-close">✕</button>
+        </div>
+        <div class="shop-stats">
+            <div class="stat-item">
+                <span class="stat-label">💎 Алмазы:</span>
+                <span class="stat-value" id="points-display">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">👤 Ник:</span>
+                <span class="stat-value" id="nickname-display">-</span>
+            </div>
+        </div>
+        <div class="shop-items">
+            <div class="shop-item-grid" id="shop-items-container">
+                <!-- РўРѕРІР°СЂС‹ Р±СѓРґСѓС‚ РґРѕР±Р°РІР»РµРЅС‹ С‡РµСЂРµР· JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- РљРЅРѕРїРєР° РґР»СЏ РѕС‚РєСЂС‹С‚РёСЏ РјР°РіР°Р·РёРЅР° -->
+    <button id="open-shop-btn" class="open-shop-btn" onclick="openShop()" title="Открыть магазин">🛍️</button>
+
+    <!-- РђРґРјРёРЅ РїР°РЅРµР»СЊ -->
+    <div id="admin-panel" class="admin-panel closed">
+        <div class="admin-header">
+            <h3>вљ™пёЏ РђРґРјРёРЅ РїР°РЅРµР»СЊ</h3>
+            <button onclick="closeAdminPanel()" class="admin-close">вњ•</button>
+        </div>
+        
+        <div class="admin-tabs">
+            <button class="admin-tab-btn active" onclick="switchAdminTab('members')">рџ‘Ґ РЈС‡Р°СЃС‚РЅРёРєРё</button>
+            <button class="admin-tab-btn" onclick="switchAdminTab('stats')">рџ“Љ РЎС‚Р°С‚РёСЃС‚РёРєР°</button>
+            <button class="admin-tab-btn" onclick="switchAdminTab('settings')">вљ™пёЏ РќР°СЃС‚СЂРѕР№РєРё</button>
+        </div>
+
+        <!-- Р’РєР»Р°РґРєР° СѓС‡Р°СЃС‚РЅРёРєРѕРІ -->
+        <div id="admin-members-tab" class="admin-tab-content">
+            <div class="admin-search">
+                <input type="text" id="admin-search-input" placeholder="РџРѕРёСЃРє СѓС‡Р°СЃС‚РЅРёРєР°..." onkeyup="filterAdminMembers()">
+            </div>
+            <div id="admin-members-list" class="admin-members-list">
+                <!-- РЎРїРёСЃРѕРє СѓС‡Р°СЃС‚РЅРёРєРѕРІ Р±СѓРґРµС‚ РґРѕР±Р°РІР»РµРЅ С‡РµСЂРµР· JS -->
+            </div>
+        </div>
+
+        <!-- Р’РєР»Р°РґРєР° СЃС‚Р°С‚РёСЃС‚РёРєРё -->
+        <div id="admin-stats-tab" class="admin-tab-content" style="display: none;">
+            <div class="admin-stats-content">
+                <div class="stat-box">
+                    <span class="stat-title">Р’СЃРµРіРѕ СѓС‡Р°СЃС‚РЅРёРєРѕРІ:</span>
+                    <span class="stat-value" id="admin-total-members">0</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-title">Р’СЃРµРіРѕ СЃРѕРѕР±С‰РµРЅРёР№:</span>
+                    <span class="stat-value" id="admin-total-messages">0</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-title">Р’СЃРµРіРѕ Р°Р»РјР°Р·РѕРІ:</span>
+                    <span class="stat-value" id="admin-total-diamonds">0</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-title">РЎСЂРµРґРЅРµРµ Р°Р»РјР°Р·РѕРІ РЅР° СѓС‡Р°СЃС‚РЅРёРєР°:</span>
+                    <span class="stat-value" id="admin-avg-diamonds">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Р’РєР»Р°РґРєР° РЅР°СЃС‚СЂРѕРµРє -->
+        <div id="admin-settings-tab" class="admin-tab-content" style="display: none;">
+            <div class="admin-settings-content">
+                <div class="setting-item">
+                    <label>РќР°РіСЂР°РґР° Р·Р° СЃРѕРѕР±С‰РµРЅРёРµ (Р°Р»РјР°Р·РѕРІ):</label>
+                    <input type="number" id="admin-msg-reward" min="1" value="3">
+                    <button onclick="updateAdminSetting('msgReward')">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+                </div>
+                <div class="setting-item">
+                    <label>РџР°СЃСЃРёРІРЅС‹Р№ РґРѕС…РѕРґ (Р°Р»РјР°Р·РѕРІ РєР°Р¶РґС‹Рµ 7Рј):</label>
+                    <input type="number" id="admin-passive-reward" min="1" value="1">
+                    <button onclick="updateAdminSetting('passiveReward')">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+                </div>
+                <div class="setting-item">
+                    <label>Р¦РµРЅР° СЃРјРµРЅС‹ РЅРёРєР°:</label>
+                    <input type="number" id="admin-nick-price" min="1" value="1000">
+                    <button onclick="updateAdminSetting('nickPrice')">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+                </div>
+                <div class="setting-item">
+                    <label id="admin-cooldown-label">Ограничение сообщений (cooldown): включено</label>
+                    <button id="admin-cooldown-toggle-btn" onclick="updateAdminSetting('messageCooldown')">Выключить</button>
+                </div>
+                <div class="setting-item">
+                    <label id="admin-reset-accounts-label">Сброс локальных аккаунтов на этом устройстве</label>
+                    <button id="admin-reset-accounts-btn" class="danger" onclick="clearAllLocalAccounts()">Сбросить все аккаунты</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- РљРЅРѕРїРєР° РґР»СЏ РѕС‚РєСЂС‹С‚РёСЏ Р°РґРјРёРЅ РїР°РЅРµР»Рё (РІРёРґРЅР° С‚РѕР»СЊРєРѕ Р°РґРјРёРЅР°Рј) -->
+    <button id="admin-toggle-btn" class="admin-toggle-btn" onclick="openAdminPanel()" style="display: none;" title="РђРґРјРёРЅ РїР°РЅРµР»СЊ">вљ™пёЏ</button>
+
+    <!-- РњРѕРґР°Р»СЊРЅРѕРµ РѕРєРЅРѕ РґР»СЏ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ РїСЂРѕС„РёР»СЏ -->
+    <div id="admin-edit-modal" class="admin-edit-modal" style="display: none;">
+        <div class="admin-edit-content">
+            <div class="admin-edit-header">
+                <h4>Р РµРґР°РєС‚РёСЂРѕРІР°РЅРёРµ РїСЂРѕС„РёР»СЏ</h4>
+                <button onclick="closeAdminEditModal()" class="admin-modal-close">вњ•</button>
+            </div>
+            <div id="admin-edit-form" class="admin-edit-form">
+                <div class="form-group">
+                    <label>РќРёРє:</label>
+                    <input type="text" id="admin-edit-nick" placeholder="Р’РІРµРґРё РЅРѕРІС‹Р№ РЅРёРє">
+                </div>
+                <div class="form-group">
+                    <label>РђР»РјР°Р·С‹:</label>
+                    <input type="number" id="admin-edit-diamonds" placeholder="РљРѕР»РёС‡РµСЃС‚РІРѕ Р°Р»РјР°Р·РѕРІ">
+                </div>
+                <div class="form-group">
+                    <label>Р”РѕР±Р°РІРёС‚СЊ/РІС‹С‡РµСЃС‚СЊ Р°Р»РјР°Р·С‹:</label>
+                    <div class="diamond-adjust">
+                        <button onclick="adjustDiamonds(-100)">-100</button>
+                        <button onclick="adjustDiamonds(-10)">-10</button>
+                        <button onclick="adjustDiamonds(10)">+10</button>
+                        <button onclick="adjustDiamonds(100)">+100</button>
+                        <input type="number" id="admin-custom-diamonds" placeholder="РЎСѓРјРјР°" style="width: 80px;">
+                        <button onclick="adjustDiamonds(parseFloat(document.getElementById('admin-custom-diamonds').value))">РџСЂРёРјРµРЅРёС‚СЊ</button>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button onclick="saveAdminEditMember()" class="btn-save">рџ’ѕ РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+                    <button onclick="deleteAdminMember()" class="btn-delete">рџ—‘пёЏ РЈРґР°Р»РёС‚СЊ</button>
+                    <button onclick="closeAdminEditModal()" class="btn-cancel">вќЊ РћС‚РјРµРЅР°</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="custom-popup-overlay" class="custom-popup-overlay" aria-hidden="true">
+        <div class="custom-popup-card" role="dialog" aria-modal="true" aria-labelledby="custom-popup-title">
+            <h4 id="custom-popup-title" class="custom-popup-title">ПРЕДУПРЕЖДЕНИЕ</h4>
+            <div id="custom-popup-message" class="custom-popup-message"></div>
+            <div class="custom-popup-actions">
+                <button id="custom-popup-cancel" class="custom-popup-btn cancel">Отмена</button>
+                <button id="custom-popup-ok" class="custom-popup-btn ok">ОК</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
