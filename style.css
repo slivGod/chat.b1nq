@@ -1625,6 +1625,40 @@ canvas#space {
     font-size: 1.12rem;
 }
 
+.auth-notice {
+    display: none;
+    margin: 0 24px 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
+.auth-notice.is-visible {
+    display: block;
+}
+
+.auth-notice.is-error {
+    border-color: rgba(255, 92, 92, 0.5);
+    background: rgba(255, 92, 92, 0.12);
+    color: #ffd4d4;
+}
+
+.auth-notice.is-success {
+    border-color: rgba(69, 201, 122, 0.45);
+    background: rgba(69, 201, 122, 0.12);
+    color: #d7ffe4;
+}
+
+.auth-notice.is-info {
+    border-color: rgba(86, 156, 255, 0.45);
+    background: rgba(86, 156, 255, 0.12);
+    color: #dbe9ff;
+}
+
 .auth-container .form-field {
     display: flex;
     flex-direction: column;

@@ -825,6 +825,28 @@ function setButtonLoading(buttonId, isLoading, loadingText, idleText) {
     button.textContent = isLoading ? loadingText : idleText;
 }
 
+function showAuthNotice(message, type = 'info') {
+    const notice = document.getElementById('auth-notice');
+    if (!notice) {
+        alert(message);
+        return;
+    }
+    notice.textContent = message || '';
+    notice.className = 'auth-notice';
+    if (!message) return;
+    notice.classList.add('is-visible');
+    if (type === 'error' || type === 'success' || type === 'info') {
+        notice.classList.add(`is-${type}`);
+    }
+}
+
+function clearAuthNotice() {
+    const notice = document.getElementById('auth-notice');
+    if (!notice) return;
+    notice.textContent = '';
+    notice.className = 'auth-notice';
+}
+
 function switchAuthForm(formId) {
     document.querySelectorAll('#auth-container .auth-form').forEach((form) => {
         form.classList.remove('active-form');
@@ -836,26 +858,32 @@ function switchAuthForm(formId) {
 }
 
 function showUserRegister() {
+    clearAuthNotice();
     switchAuthForm('user-register-form');
 }
 
 function showUserLogin() {
+    clearAuthNotice();
     switchAuthForm('user-login-form');
 }
 
 function showAdminLogin() {
+    clearAuthNotice();
     switchAuthForm('admin-login-form');
 }
 
 function showAdminRegister() {
+    clearAuthNotice();
     switchAuthForm('admin-register-form');
 }
 
 function showUserVerify() {
+    clearAuthNotice();
     switchAuthForm('user-verify-form');
 }
 
 function showForgotPassword() {
+    clearAuthNotice();
     switchAuthForm('user-forgot-form');
 }
 
@@ -915,6 +943,7 @@ function finalizeAuth(nickname, role, authToken = null) {
 
 async function registerUser() {
     setButtonLoading('user-register-btn', true, 'Идет регистрация...', 'Зарегистрироваться');
+    showAuthNotice('Проверяю данные и отправляю код на почту...', 'info');
     const nickname = (document.getElementById('user-register-nick')?.value || '').trim();
     const email = (document.getElementById('user-register-email')?.value || '').trim();
     const password = document.getElementById('user-register-password')?.value || '';
@@ -922,63 +951,69 @@ async function registerUser() {
 
     if (!nickname || !email || !password || !confirmPassword) {
         setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        alert('Заполни все поля регистрации');
+        showAuthNotice('Заполни все поля регистрации', 'error');
         return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        alert('Введи корректный email');
+        showAuthNotice('Введи корректный email', 'error');
         return;
     }
     if (nickname.length > 20) {
         setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        alert('Ник не должен быть длиннее 20 символов');
+        showAuthNotice('Ник не должен быть длиннее 20 символов', 'error');
         return;
     }
     if (password.length < 4) {
         setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        alert('Пароль должен быть не короче 4 символов');
+        showAuthNotice('Пароль должен быть не короче 4 символов', 'error');
         return;
     }
     if (password !== confirmPassword) {
         setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        alert('Пароли не совпадают');
+        showAuthNotice('Пароли не совпадают', 'error');
         return;
     }
 
-    const result = await authApiRequest('/api/auth/register-user', { nickname, email, password });
-    if (!result?.ok) {
-        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-        if (result.error === 'nickname_taken') {
-            alert('Пользователь с таким ником уже существует');
-        } else if (result.error === 'email_taken') {
-            alert('Этот email уже используется');
-        } else if (result.error === 'invalid_email') {
-            alert('Некорректный email');
-        } else if (result.error === 'smtp_not_configured') {
-            alert('На сервере не настроена почта (SMTP). Обратись к администратору.');
-        } else if (result.error === 'smtp_send_failed') {
-            alert('Не удалось отправить письмо с кодом. Попробуй позже.');
-        } else if (result.error === 'timeout') {
-            alert('Сервер слишком долго отвечает. Проверь Render и SMTP, затем попробуй снова.');
-        } else if (result.error === 'weak_password') {
-            alert('Пароль слишком простой');
-        } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди минуту.');
-        } else if (result.error === 'network_error') {
-            alert('Не удалось связаться с сервером');
-        } else {
-            alert('Ошибка регистрации на сервере');
+    try {
+        const result = await authApiRequest('/api/auth/register-user', { nickname, email, password });
+        if (!result?.ok) {
+            setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
+            if (result.error === 'nickname_taken') {
+                showAuthNotice('Пользователь с таким ником уже существует', 'error');
+            } else if (result.error === 'email_taken') {
+                showAuthNotice('Этот email уже используется', 'error');
+            } else if (result.error === 'invalid_email') {
+                showAuthNotice('Некорректный email', 'error');
+            } else if (result.error === 'smtp_not_configured') {
+                showAuthNotice('На сервере не настроена почта (SMTP). Обратись к администратору.', 'error');
+            } else if (result.error === 'smtp_send_failed') {
+                showAuthNotice('Не удалось отправить письмо с кодом. Проверь SMTP в Render и повтори.', 'error');
+            } else if (result.error === 'timeout') {
+                showAuthNotice('Сервер слишком долго отвечает. Если Render только проснулся, подожди и попробуй снова.', 'error');
+            } else if (result.error === 'weak_password') {
+                showAuthNotice('Пароль слишком простой', 'error');
+            } else if (result.error === 'rate_limited') {
+                showAuthNotice('Слишком много попыток. Подожди минуту.', 'error');
+            } else if (result.error === 'network_error') {
+                showAuthNotice('Не удалось связаться с сервером', 'error');
+            } else {
+                showAuthNotice(`Ошибка регистрации на сервере: ${result.error || 'unknown_error'}`, 'error');
+            }
+            return;
         }
-        return;
-    }
 
-    setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
-    document.getElementById('user-verify-nick').value = result.nickname || nickname;
-    document.getElementById('user-verify-email').value = result.email || email;
-    document.getElementById('user-verify-code').value = '';
-    showUserVerify();
-    alert(`Код подтверждения отправлен на ${result.email || email}. Введи код, чтобы завершить регистрацию.`);
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
+        document.getElementById('user-verify-nick').value = result.nickname || nickname;
+        document.getElementById('user-verify-email').value = result.email || email;
+        document.getElementById('user-verify-code').value = '';
+        showUserVerify();
+        showAuthNotice(`Код подтверждения отправлен на ${result.email || email}. Введи код, чтобы завершить регистрацию.`, 'success');
+    } catch (error) {
+        console.error('registerUser failed:', error);
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
+        showAuthNotice('Регистрация прервалась из-за ошибки в интерфейсе. Открой страницу заново и повтори.', 'error');
+    }
 }
 
 async function loginUser() {
@@ -1019,30 +1054,35 @@ async function verifyUserEmail() {
     const email = (document.getElementById('user-verify-email')?.value || '').trim();
     const code = (document.getElementById('user-verify-code')?.value || '').trim();
     if (!nickname || !email || !code) {
-        alert('Заполни ник, email и код подтверждения');
+        showAuthNotice('Заполни ник, email и код подтверждения', 'error');
         return;
     }
 
-    const result = await authApiRequest('/api/auth/verify-email', { nickname, email, code });
-    if (!result?.ok) {
-        if (result.error === 'account_not_found') {
-            alert('Аккаунт не найден для подтверждения');
-        } else if (result.error === 'email_mismatch') {
-            alert('Email не совпадает с email аккаунта');
-        } else if (result.error === 'verify_code_expired') {
-            alert('Код подтверждения истек. Отправь новый код.');
-        } else if (result.error === 'invalid_verify_code') {
-            alert('Неверный код подтверждения');
-        } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди минуту.');
-        } else {
-            alert('Не удалось подтвердить email');
+    try {
+        const result = await authApiRequest('/api/auth/verify-email', { nickname, email, code });
+        if (!result?.ok) {
+            if (result.error === 'account_not_found') {
+                showAuthNotice('Аккаунт не найден для подтверждения', 'error');
+            } else if (result.error === 'email_mismatch') {
+                showAuthNotice('Email не совпадает с email аккаунта', 'error');
+            } else if (result.error === 'verify_code_expired') {
+                showAuthNotice('Код подтверждения истек. Отправь новый код.', 'error');
+            } else if (result.error === 'invalid_verify_code') {
+                showAuthNotice('Неверный код подтверждения', 'error');
+            } else if (result.error === 'rate_limited') {
+                showAuthNotice('Слишком много попыток. Подожди минуту.', 'error');
+            } else {
+                showAuthNotice(`Не удалось подтвердить email: ${result.error || 'unknown_error'}`, 'error');
+            }
+            return;
         }
-        return;
-    }
 
-    alert('Email подтвержден. Вход выполнен.');
-    finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
+        showAuthNotice('Email подтвержден. Вход выполнен.', 'success');
+        finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
+    } catch (error) {
+        console.error('verifyUserEmail failed:', error);
+        showAuthNotice('Подтверждение прервалось из-за ошибки интерфейса. Обнови страницу и повтори.', 'error');
+    }
 }
 
 async function resendUserVerifyCode() {
@@ -2621,4 +2661,3 @@ document.addEventListener('click', (e) => {
         closeAdminEditModal();
     }
 });
-
