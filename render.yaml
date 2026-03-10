@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: xss-b1nq-site
+    runtime: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start

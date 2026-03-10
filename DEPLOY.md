@@ -1,37 +1,59 @@
-# Deploy: GitHub Pages + Online Chat
+# Deploy to Render (site + chat)
 
+This project runs as one Node.js Web Service:
+- `server.js` serves the site files
+- WebSocket chat is available at `/ws`
 
-## 1) Deploy backend (WebSocket server)
+## 1) Required files in repo root
 
-This project needs a Node.js server for chat.  
-Deploy `server.js` to any Node host (Render, Railway, Fly.io, VPS).
+- `server.js`
+- `package.json`
+- `render.yaml`
+- `index.html`
+- `style.css`
+- `admin-styles.css`
+- `script.js`
+- `config.js`
 
-Environment:
-- `PORT` is set by host automatically
-- `HOST=0.0.0.0` (optional)
+## 2) Render service settings
 
-Start command:
-```bash
-npm install
-npm start
-```
+If creating manually:
+- Environment: `Node`
+- Build Command: `npm install`
+- Start Command: `npm start`
+- Root Directory: empty
 
-After deploy, copy backend URL, for example:
-- `https://my-chat-backend.onrender.com`
+## 3) Environment variables (important)
 
-## 2) Configure frontend for GitHub Pages
+Set these in Render -> Service -> `Environment`:
 
-Edit `config.js`:
+1. `STAFF_SECRET_CODE` = your private admin registration phrase  
+   Example: `my-very-strong-secret-2026`
+2. `HOST` = `0.0.0.0` (optional, already defaulted in code)
+
+`PORT` is provided by Render automatically.
+
+## 4) Why this is safer now
+
+- Secret phrase is no longer stored in frontend code.
+- Frontend sends entered phrase to server endpoint `/api/verify-staff-secret`.
+- Server compares it with `STAFF_SECRET_CODE` from Render environment.
+
+If `STAFF_SECRET_CODE` is empty, admin/staff registration is disabled.
+
+## 5) How to rotate (change) admin secret phrase
+
+1. Open Render -> your service -> `Environment`.
+2. Edit `STAFF_SECRET_CODE`.
+3. Save and redeploy (`Manual Deploy` -> `Deploy latest commit`).
+
+You always know the current phrase because it exists only in Render environment.
+
+## 6) Frontend config
+
+For deployment on the same Render domain:
+
 ```js
-window.CHAT_SERVER_URL = 'https://my-chat-backend.onrender.com';
+window.CHAT_SERVER_URL = 'https://chat-b1nq.onrender.com';
 window.CHAT_WS_PATH = '/ws';
 ```
-
-Then publish frontend files (`index.html`, `style.css`, `script.js`, `admin-styles.css`, `config.js`) to GitHub Pages.
-
-## 3) Open site
-
-Frontend (GitHub Pages):
-- `https://<your-user>.github.io/<repo>/`
-
-Chat will connect to backend URL from `config.js`.
