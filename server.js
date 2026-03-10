@@ -10,6 +10,9 @@ const ROOT = __dirname;
 const STAFF_SECRET_CODE = String(process.env.STAFF_SECRET_CODE || '').trim();
 const STAFF_TOKEN_SECRET = String(process.env.STAFF_TOKEN_SECRET || STAFF_SECRET_CODE || '').trim();
 const STAFF_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const AUTH_TOKEN_SECRET = String(process.env.AUTH_TOKEN_SECRET || STAFF_TOKEN_SECRET || STAFF_SECRET_CODE || '').trim();
+const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ACCOUNTS_FILE = path.join(ROOT, 'accounts.json');
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -32,6 +35,12 @@ const MAX_HISTORY = 100;
 const rateLimits = new Map();
 const moderationByNick = new Map();
 const moderationByIp = new Map();
+const accountsStore = {
+    users: {},
+    staff: {}
+};
+let isSavingAccounts = false;
+let pendingAccountsSave = false;
 
 const SPAM_POLICY = {
     burstWindowMs: 6000,
@@ -176,6 +185,97 @@ function verifyStaffSessionToken(token) {
         const nickname = String(payload.nickname || '').trim().toLowerCase();
         if (!nickname) return null;
         return { nickname, role: payload.role, exp: payload.exp };
+    } catch (error) {
+        return null;
+    }
+}
+
+function normalizeNick(nickname) {
+    return String(nickname || '').trim().toLowerCase();
+}
+
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(String(password || '')).digest('hex');
+}
+
+function loadAccountsStore() {
+    try {
+        if (!fs.existsSync(ACCOUNTS_FILE)) return;
+        const raw = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return;
+        accountsStore.users = parsed.users && typeof parsed.users === 'object' ? parsed.users : {};
+        accountsStore.staff = parsed.staff && typeof parsed.staff === 'object' ? parsed.staff : {};
+    } catch (error) {
+        console.warn('Warning: failed to load accounts store, using empty store.');
+    }
+}
+
+function saveAccountsStore() {
+    pendingAccountsSave = true;
+    if (isSavingAccounts) return;
+    isSavingAccounts = true;
+
+    const flush = () => {
+        if (!pendingAccountsSave) {
+            isSavingAccounts = false;
+            return;
+        }
+        pendingAccountsSave = false;
+        const snapshot = JSON.stringify(accountsStore, null, 2);
+        fs.writeFile(ACCOUNTS_FILE, snapshot, 'utf8', (error) => {
+            if (error) {
+                console.error('Failed to save accounts store:', error.message);
+            }
+            setImmediate(flush);
+        });
+    };
+
+    flush();
+}
+
+function getAccountByNick(normalizedNick) {
+    return accountsStore.users[normalizedNick] || accountsStore.staff[normalizedNick] || null;
+}
+
+function createAuthToken({ nickname, role, ttlMs = AUTH_SESSION_TTL_MS }) {
+    if (!AUTH_TOKEN_SECRET) return null;
+    const payload = {
+        nickname: normalizeNick(nickname),
+        role,
+        exp: Date.now() + ttlMs
+    };
+    const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+    const signature = crypto
+        .createHmac('sha256', AUTH_TOKEN_SECRET)
+        .update(encodedPayload)
+        .digest('base64url');
+    return `${encodedPayload}.${signature}`;
+}
+
+function verifyAuthToken(token) {
+    if (!AUTH_TOKEN_SECRET || !token || typeof token !== 'string') return null;
+    const [encodedPayload, signature] = token.split('.');
+    if (!encodedPayload || !signature) return null;
+
+    const expectedSignature = crypto
+        .createHmac('sha256', AUTH_TOKEN_SECRET)
+        .update(encodedPayload)
+        .digest('base64url');
+
+    const expectedBuf = Buffer.from(expectedSignature);
+    const actualBuf = Buffer.from(signature);
+    if (expectedBuf.length !== actualBuf.length) return null;
+    if (!crypto.timingSafeEqual(expectedBuf, actualBuf)) return null;
+
+    try {
+        const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+        if (!payload || typeof payload !== 'object') return null;
+        if (!payload.exp || payload.exp <= Date.now()) return null;
+        const nickname = normalizeNick(payload.nickname);
+        const role = String(payload.role || 'user');
+        if (!nickname || !['user', 'admin', 'moderator'].includes(role)) return null;
+        return { nickname, role, exp: payload.exp };
     } catch (error) {
         return null;
     }
@@ -339,13 +439,27 @@ function readJsonBody(req, maxBytes = 8192) {
     });
 }
 
+loadAccountsStore();
+
 const server = http.createServer((req, res) => {
     setDefaultSecurityHeaders(res);
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const isStaffSecretApi = requestUrl.pathname === '/api/verify-staff-secret';
     const isStaffSessionApi = requestUrl.pathname === '/api/staff-session';
+    const isAuthRegisterUserApi = requestUrl.pathname === '/api/auth/register-user';
+    const isAuthLoginUserApi = requestUrl.pathname === '/api/auth/login-user';
+    const isAuthCreateStaffApi = requestUrl.pathname === '/api/auth/create-staff';
+    const isAuthLoginStaffApi = requestUrl.pathname === '/api/auth/login-staff';
+    const isAuthSessionApi = requestUrl.pathname === '/api/auth/session';
+    const isAnyApi = isStaffSecretApi
+        || isStaffSessionApi
+        || isAuthRegisterUserApi
+        || isAuthLoginUserApi
+        || isAuthCreateStaffApi
+        || isAuthLoginStaffApi
+        || isAuthSessionApi;
 
-    if ((isStaffSecretApi || isStaffSessionApi) && req.method === 'OPTIONS') {
+    if (isAnyApi && req.method === 'OPTIONS') {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -480,11 +594,257 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    if (req.method === 'POST' && isAuthRegisterUserApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-register-user:${ip}`, 25, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const password = String(payload?.password || '');
+                const normalized = normalizeNick(nickname);
+                if (!nickname || !password) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+                    return;
+                }
+                if (password.length < 4) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'weak_password' }));
+                    return;
+                }
+                if (getAccountByNick(normalized)) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'nickname_taken' }));
+                    return;
+                }
+
+                accountsStore.users[normalized] = {
+                    nickname,
+                    passwordHash: hashPassword(password),
+                    role: 'user',
+                    registered: new Date().toISOString()
+                };
+                saveAccountsStore();
+
+                const token = createAuthToken({ nickname, role: 'user' });
+                if (!token) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, nickname, role: 'user', token }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthLoginUserApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-login-user:${ip}`, 35, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const password = String(payload?.password || '');
+                const normalized = normalizeNick(nickname);
+                const account = accountsStore.users[normalized];
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (account.passwordHash !== hashPassword(password)) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_password' }));
+                    return;
+                }
+
+                const token = createAuthToken({ nickname: account.nickname, role: 'user' });
+                if (!token) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: 'user', token }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthCreateStaffApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-create-staff:${ip}`, 20, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const password = String(payload?.password || '');
+                const role = String(payload?.role || 'moderator');
+                const secretCode = String(payload?.secretCode || '').trim();
+                const normalized = normalizeNick(nickname);
+                if (!nickname || !password || !['admin', 'moderator'].includes(role)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+                    return;
+                }
+                if (!STAFF_SECRET_CODE) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'secret_not_configured' }));
+                    return;
+                }
+                if (secretCode !== STAFF_SECRET_CODE) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_secret' }));
+                    return;
+                }
+                if (password.length < 4) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'weak_password' }));
+                    return;
+                }
+                if (getAccountByNick(normalized)) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'nickname_taken' }));
+                    return;
+                }
+
+                accountsStore.staff[normalized] = {
+                    nickname,
+                    passwordHash: hashPassword(password),
+                    role,
+                    registered: new Date().toISOString()
+                };
+                saveAccountsStore();
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthLoginStaffApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-login-staff:${ip}`, 30, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const password = String(payload?.password || '');
+                const role = String(payload?.role || '');
+                const secretCode = String(payload?.secretCode || '').trim();
+                const normalized = normalizeNick(nickname);
+                const account = accountsStore.staff[normalized];
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (!STAFF_SECRET_CODE) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'secret_not_configured' }));
+                    return;
+                }
+                if (secretCode !== STAFF_SECRET_CODE) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_secret' }));
+                    return;
+                }
+                if (account.passwordHash !== hashPassword(password)) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_password' }));
+                    return;
+                }
+                if (account.role !== role) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_role' }));
+                    return;
+                }
+
+                const token = createAuthToken({ nickname: account.nickname, role: account.role });
+                if (!token) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: account.role, token }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthSessionApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-session:${ip}`, 90, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const token = String(payload?.token || '').trim();
+                const verified = verifyAuthToken(token);
+                if (!verified) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_session' }));
+                    return;
+                }
+                const source = verified.role === 'user' ? accountsStore.users : accountsStore.staff;
+                const account = source[verified.nickname];
+                if (!account || account.role !== verified.role) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: account.role }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
     const filePath = safePathFromUrl(req.url || '/');
     const rootPath = path.resolve(ROOT);
     const absPath = path.resolve(ROOT, filePath);
+    const accountsPath = path.resolve(ACCOUNTS_FILE);
 
-    if (!absPath.startsWith(rootPath)) {
+    if (!absPath.startsWith(rootPath) || absPath === accountsPath) {
         res.writeHead(403);
         res.end('Forbidden');
         return;
@@ -540,26 +900,26 @@ wss.on('connection', (ws) => {
         if (payload.type === 'join') {
             const nickname = String(payload.user || '').trim().slice(0, 20);
             const requestedRole = String(payload.role || 'user');
-            const requestedToken = String(payload.staffToken || '').trim();
-            const isRequestedStaffRole = requestedRole === 'admin' || requestedRole === 'moderator';
+            const requestedToken = String(payload.authToken || payload.staffToken || '').trim();
             let role = 'user';
             if (!nickname) return;
 
-            if (isRequestedStaffRole) {
-                const tokenPayload = verifyStaffSessionToken(requestedToken);
+            if (requestedToken) {
+                const tokenPayload = verifyAuthToken(requestedToken);
                 const normalizedNick = nickname.toLowerCase();
-                if (
-                    tokenPayload &&
-                    tokenPayload.role === requestedRole &&
-                    tokenPayload.nickname === normalizedNick
-                ) {
-                    role = requestedRole;
-                } else {
+                if (tokenPayload && tokenPayload.nickname === normalizedNick) {
+                    role = tokenPayload.role;
+                } else if (requestedRole === 'admin' || requestedRole === 'moderator') {
                     send(ws, {
                         type: 'system',
                         text: '[SYSTEM] Staff role verification failed. Connected as user.'
                     });
                 }
+            } else if (requestedRole === 'admin' || requestedRole === 'moderator') {
+                send(ws, {
+                    type: 'system',
+                    text: '[SYSTEM] Staff role verification failed. Connected as user.'
+                });
             }
 
             userData.nickState = getOrCreateModerationState(moderationByNick, nickname);
@@ -650,5 +1010,8 @@ server.listen(PORT, HOST, () => {
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
     if (!STAFF_SECRET_CODE) {
         console.warn('Warning: STAFF_SECRET_CODE is not set. Staff registration will be disabled.');
+    }
+    if (!AUTH_TOKEN_SECRET) {
+        console.warn('Warning: AUTH_TOKEN_SECRET is not set. Auth sessions will be disabled.');
     }
 });

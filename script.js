@@ -682,51 +682,9 @@ function getStoredAccountsLike(key) {
 }
 
 function migrateLegacyAccountsStorage() {
-    const users = getStoredAccountsLike(USER_ACCOUNTS_KEY);
-    const staff = getStoredAccountsLike(STAFF_ACCOUNTS_KEY);
-    let usersChanged = false;
-    let staffChanged = false;
-
-    LEGACY_USER_ACCOUNTS_KEYS.forEach((legacyKey) => {
-        const legacyUsers = getStoredAccountsLike(legacyKey);
-        Object.entries(legacyUsers).forEach(([legacyNick, legacyData]) => {
-            const nickname = String(legacyData?.nickname || legacyNick || '').trim();
-            if (!nickname) return;
-            const key = normalizeNick(nickname);
-            if (!users[key]) {
-                users[key] = {
-                    nickname,
-                    passwordHash: legacyData?.passwordHash || '',
-                    password: legacyData?.password || '',
-                    role: 'user',
-                    registered: legacyData?.registered || new Date().toISOString()
-                };
-                usersChanged = true;
-            }
-        });
-    });
-
-    LEGACY_STAFF_ACCOUNTS_KEYS.forEach((legacyKey) => {
-        const legacyStaff = getStoredAccountsLike(legacyKey);
-        Object.entries(legacyStaff).forEach(([legacyNick, legacyData]) => {
-            const nickname = String(legacyData?.nickname || legacyNick || '').trim();
-            if (!nickname) return;
-            const key = normalizeNick(nickname);
-            if (!staff[key]) {
-                staff[key] = {
-                    nickname,
-                    passwordHash: legacyData?.passwordHash || '',
-                    password: legacyData?.password || '',
-                    role: legacyData?.role || 'moderator',
-                    registered: legacyData?.registered || new Date().toISOString()
-                };
-                staffChanged = true;
-            }
-        });
-    });
-
-    if (usersChanged) setStoredObject(USER_ACCOUNTS_KEY, users);
-    if (staffChanged) setStoredObject(STAFF_ACCOUNTS_KEY, staff);
+    // Accounts are server-side now. Remove old local account stores.
+    [USER_ACCOUNTS_KEY, STAFF_ACCOUNTS_KEY, ...LEGACY_USER_ACCOUNTS_KEYS, ...LEGACY_STAFF_ACCOUNTS_KEYS]
+        .forEach((key) => localStorage.removeItem(key));
 }
 
 let popupState = {
@@ -926,6 +884,33 @@ async function issueStaffSessionToken(secretCode, nickname, role) {
     }
 }
 
+async function authApiRequest(endpointPath, payload) {
+    const endpoint = resolveApiEndpoint(endpointPath);
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        });
+        let data = {};
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = {};
+        }
+
+        if (!response.ok) {
+            return {
+                ok: false,
+                error: data?.error || (response.status === 429 ? 'rate_limited' : 'server_error')
+            };
+        }
+        return data;
+    } catch (error) {
+        return { ok: false, error: 'network_error' };
+    }
+}
+
 function switchAuthForm(formId) {
     document.querySelectorAll('#auth-container .auth-form').forEach((form) => {
         form.classList.remove('active-form');
@@ -972,19 +957,19 @@ function updateHeaderNickname(nickname) {
     headerNick.textContent = nickname || 'xss.b1nq';
 }
 
-function persistSession(nickname, role, staffToken = null) {
+function persistSession(nickname, role, authToken = null) {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
         nickname,
         role,
-        staffToken: staffToken || null,
+        authToken: authToken || null,
         loginAt: new Date().toISOString()
     }));
 }
 
-function finalizeAuth(nickname, role, staffToken = null) {
-    persistSession(nickname, role, staffToken);
+function finalizeAuth(nickname, role, authToken = null) {
+    persistSession(nickname, role, authToken);
     localStorage.setItem('chatNickname', nickname);
-    const isStaffWithToken = (role === 'admin' || role === 'moderator') && Boolean(staffToken);
+    const isStaffWithToken = (role === 'admin' || role === 'moderator') && Boolean(authToken);
     localStorage.setItem('isAdmin', String(isStaffWithToken));
 
     savedSideNickname = nickname;
@@ -1028,25 +1013,24 @@ async function registerUser() {
         return;
     }
 
-    const users = getStoredObject(USER_ACCOUNTS_KEY);
-    const staff = getStoredObject(STAFF_ACCOUNTS_KEY);
-    const key = normalizeNick(nickname);
-
-    if (users[key] || staff[key]) {
-        alert('Пользователь с таким ником уже существует');
+    const result = await authApiRequest('/api/auth/register-user', { nickname, password });
+    if (!result?.ok) {
+        if (result.error === 'nickname_taken') {
+            alert('Пользователь с таким ником уже существует');
+        } else if (result.error === 'weak_password') {
+            alert('Пароль слишком простой');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много попыток. Подожди минуту.');
+        } else if (result.error === 'network_error') {
+            alert('Не удалось связаться с сервером');
+        } else {
+            alert('Ошибка регистрации на сервере');
+        }
         return;
     }
 
-    users[key] = {
-        nickname,
-        passwordHash: await hashPassword(password),
-        role: 'user',
-        registered: new Date().toISOString()
-    };
-    setStoredObject(USER_ACCOUNTS_KEY, users);
-
     alert('Регистрация завершена');
-    finalizeAuth(nickname, 'user');
+    finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
 }
 
 async function loginUser() {
@@ -1058,20 +1042,23 @@ async function loginUser() {
         return;
     }
 
-    const users = getStoredObject(USER_ACCOUNTS_KEY);
-    const account = users[normalizeNick(nickname)];
-    if (!account) {
-        alert('Аккаунт не найден. Проверь ник или зарегистрируйся заново.');
+    const result = await authApiRequest('/api/auth/login-user', { nickname, password });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт не найден. Проверь ник или зарегистрируйся заново.');
+        } else if (result.error === 'invalid_password') {
+            alert('Неверный пароль');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много попыток. Подожди минуту.');
+        } else if (result.error === 'network_error') {
+            alert('Не удалось связаться с сервером');
+        } else {
+            alert('Ошибка входа на сервере');
+        }
         return;
     }
 
-    const passwordOk = await checkAccountPasswordAndMigrate(account, password, USER_ACCOUNTS_KEY, normalizeNick(nickname));
-    if (!passwordOk) {
-        alert('Неверный пароль');
-        return;
-    }
-
-    finalizeAuth(account.nickname, 'user');
+    finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
 }
 
 async function createStaffAccount() {
@@ -1086,21 +1073,6 @@ async function createStaffAccount() {
         return;
     }
 
-    const secretResult = await verifyStaffSecret(secretCode);
-    if (!secretResult.ok) {
-        if (secretResult.error === 'invalid_secret') {
-            alert('Неверная секретная фраза');
-        } else if (secretResult.error === 'secret_not_configured') {
-            alert('На сервере не настроена секретная фраза STAFF_SECRET_CODE');
-        } else if (secretResult.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди 1 минуту и попробуй снова.');
-        } else if (secretResult.error === 'network_error') {
-            alert('Не удалось проверить секретную фразу: нет связи с сервером');
-        } else {
-            alert('Ошибка проверки секретной фразы на сервере');
-        }
-        return;
-    }
     if (!nickname || !password || !confirmPassword) {
         alert('Заполни все поля');
         return;
@@ -1118,22 +1090,30 @@ async function createStaffAccount() {
         return;
     }
 
-    const users = getStoredObject(USER_ACCOUNTS_KEY);
-    const staff = getStoredObject(STAFF_ACCOUNTS_KEY);
-    const key = normalizeNick(nickname);
-
-    if (users[key] || staff[key]) {
-        alert('Пользователь с таким ником уже существует');
+    const result = await authApiRequest('/api/auth/create-staff', {
+        nickname,
+        password,
+        role,
+        secretCode
+    });
+    if (!result?.ok) {
+        if (result.error === 'invalid_secret') {
+            alert('Неверная секретная фраза');
+        } else if (result.error === 'secret_not_configured') {
+            alert('На сервере не настроена секретная фраза STAFF_SECRET_CODE');
+        } else if (result.error === 'nickname_taken') {
+            alert('Пользователь с таким ником уже существует');
+        } else if (result.error === 'weak_password') {
+            alert('Пароль слишком простой');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много попыток. Подожди 1 минуту и попробуй снова.');
+        } else if (result.error === 'network_error') {
+            alert('Не удалось связаться с сервером');
+        } else {
+            alert('Ошибка создания аккаунта на сервере');
+        }
         return;
     }
-
-    staff[key] = {
-        nickname,
-        passwordHash: await hashPassword(password),
-        role,
-        registered: new Date().toISOString()
-    };
-    setStoredObject(STAFF_ACCOUNTS_KEY, staff);
 
     alert('Аккаунт состава создан. Выполни вход.');
     showAdminLogin();
@@ -1150,32 +1130,26 @@ async function loginStaff() {
         return;
     }
 
-    const staff = getStoredObject(STAFF_ACCOUNTS_KEY);
-    const account = staff[normalizeNick(nickname)];
-    if (!account) {
-        alert('Аккаунт состава не найден');
-        return;
-    }
-
-    const passwordOk = await checkAccountPasswordAndMigrate(account, password, STAFF_ACCOUNTS_KEY, normalizeNick(nickname));
-    if (!passwordOk) {
-        alert('Неверный пароль аккаунта состава');
-        return;
-    }
-    if (account.role !== role) {
-        alert('Выбрана неверная роль для этого аккаунта');
-        return;
-    }
-
-    const tokenResult = await issueStaffSessionToken(secretCode, account.nickname, account.role);
-    if (!tokenResult.ok) {
-        if (tokenResult.error === 'invalid_secret') {
+    const result = await authApiRequest('/api/auth/login-staff', {
+        nickname,
+        password,
+        role,
+        secretCode
+    });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт состава не найден');
+        } else if (result.error === 'invalid_password') {
+            alert('Неверный пароль аккаунта состава');
+        } else if (result.error === 'invalid_role') {
+            alert('Выбрана неверная роль для этого аккаунта');
+        } else if (result.error === 'invalid_secret') {
             alert('Неверная секретная фраза');
-        } else if (tokenResult.error === 'secret_not_configured') {
+        } else if (result.error === 'secret_not_configured') {
             alert('На сервере не настроена секретная фраза STAFF_SECRET_CODE');
-        } else if (tokenResult.error === 'rate_limited') {
+        } else if (result.error === 'rate_limited') {
             alert('Слишком много попыток. Подожди 1 минуту и попробуй снова.');
-        } else if (tokenResult.error === 'network_error') {
+        } else if (result.error === 'network_error') {
             alert('Не удалось связаться с сервером для подтверждения роли');
         } else {
             alert('Ошибка проверки роли состава на сервере');
@@ -1183,7 +1157,7 @@ async function loginStaff() {
         return;
     }
 
-    finalizeAuth(account.nickname, account.role, tokenResult.token);
+    finalizeAuth(result.nickname || nickname, result.role || role, result.token || null);
 }
 
 // Backward compatibility for existing onclick names
@@ -1195,7 +1169,7 @@ function createAdmin() {
     createStaffAccount();
 }
 
-function restoreAuthSession() {
+async function restoreAuthSession() {
     const raw = localStorage.getItem(AUTH_SESSION_KEY);
     if (!raw) {
         showAuthScreen();
@@ -1211,38 +1185,36 @@ function restoreAuthSession() {
             return;
         }
 
-        const normalized = normalizeNick(session.nickname);
-        const users = getStoredObject(USER_ACCOUNTS_KEY);
-        const staff = getStoredObject(STAFF_ACCOUNTS_KEY);
-        const isStaffRole = session.role === 'admin' || session.role === 'moderator';
-        const hasAccount = isStaffRole
-            ? Boolean(staff[normalized]) && staff[normalized].role === session.role
-            : Boolean(users[normalized]);
-        const hasValidStaffToken = !isStaffRole || Boolean(session?.staffToken);
-        if (!hasAccount) {
+        const token = String(session?.authToken || '').trim();
+        if (!token) {
             localStorage.removeItem(AUTH_SESSION_KEY);
             localStorage.removeItem('chatNickname');
             localStorage.setItem('isAdmin', 'false');
             showAuthScreen();
             showUserLogin();
-            alert('Сессия устарела: аккаунт не найден. Войди заново.');
+            alert('Сессия устарела. Войди заново.');
             return;
         }
-        if (!hasValidStaffToken) {
+
+        const result = await authApiRequest('/api/auth/session', { token });
+        if (!result?.ok) {
             localStorage.removeItem(AUTH_SESSION_KEY);
             localStorage.removeItem('chatNickname');
             localStorage.setItem('isAdmin', 'false');
             showAuthScreen();
-            showAdminLogin();
-            alert('Сессия состава устарела. Войди заново с секретной фразой.');
+            showUserLogin();
+            alert('Сессия истекла или аккаунт изменился. Войди заново.');
             return;
         }
 
-        savedSideNickname = session.nickname;
-        currentSideUser = session.nickname;
-        updateHeaderNickname(session.nickname);
-        localStorage.setItem('chatNickname', session.nickname);
-        localStorage.setItem('isAdmin', String(isStaffRole && hasValidStaffToken));
+        const role = String(result.role || 'user');
+        const nickname = String(result.nickname || session.nickname || '');
+        savedSideNickname = nickname;
+        currentSideUser = nickname;
+        updateHeaderNickname(nickname);
+        persistSession(nickname, role, token);
+        localStorage.setItem('chatNickname', nickname);
+        localStorage.setItem('isAdmin', String(role === 'admin' || role === 'moderator'));
         showMainApp();
         completeRegistration();
         initAdminPanel();
@@ -1287,17 +1259,25 @@ async function logoutAccount() {
     if (adminPanel) adminPanel.classList.add('closed');
 
     showAuthScreen();
-    const users = getStoredObject(USER_ACCOUNTS_KEY);
-    if (Object.keys(users).length > 0) {
-        showUserLogin();
-    } else {
-        showUserRegister();
-    }
+    showUserLogin();
 }
 
 async function clearAllLocalAccounts() {
     if (!syncAdminPrivilegeFlag()) {
         alert('Только админ может выполнять полный сброс аккаунтов');
+        return;
+    }
+    const rawSession = localStorage.getItem(AUTH_SESSION_KEY);
+    let authToken = '';
+    try {
+        authToken = String(JSON.parse(rawSession || '{}')?.authToken || '');
+    } catch (error) {
+        authToken = '';
+    }
+    const serverSession = await authApiRequest('/api/auth/session', { token: authToken });
+    if (!serverSession?.ok || (serverSession.role !== 'admin' && serverSession.role !== 'moderator')) {
+        alert('Сервер не подтвердил права админа. Войди заново.');
+        localStorage.setItem('isAdmin', 'false');
         return;
     }
 
@@ -1608,10 +1588,10 @@ function resolveUserRole(nickname) {
         try {
             const session = JSON.parse(sessionRaw);
             if (session?.nickname === nickname && session?.role) {
-                if ((session.role === 'admin' || session.role === 'moderator') && session?.staffToken) {
+                if ((session.role === 'admin' || session.role === 'moderator') && session?.authToken) {
                     return session.role;
                 }
-                if (session.role === 'user') {
+                if (session.role === 'user' && session?.authToken) {
                     return 'user';
                 }
             }
@@ -1623,12 +1603,12 @@ function resolveUserRole(nickname) {
     return 'user';
 }
 
-function getCurrentSessionStaffToken() {
+function getCurrentSessionAuthToken() {
     const sessionRaw = localStorage.getItem(AUTH_SESSION_KEY);
     if (!sessionRaw) return '';
     try {
         const session = JSON.parse(sessionRaw);
-        return String(session?.staffToken || '');
+        return String(session?.authToken || '');
     } catch (error) {
         return '';
     }
@@ -1704,7 +1684,7 @@ function connectOnlineChat() {
             type: 'join',
             user: currentSideUser,
             role: resolveUserRole(currentSideUser),
-            staffToken: getCurrentSessionStaffToken()
+            authToken: getCurrentSessionAuthToken()
         }));
     };
 
@@ -2200,13 +2180,8 @@ function syncAdminPrivilegeFlag() {
     try {
         const session = JSON.parse(sessionRaw);
         const role = String(session?.role || '');
-        const normalizedNick = normalizeNick(String(session?.nickname || ''));
-        const staff = getStoredObject(STAFF_ACCOUNTS_KEY);
-        const staffAccount = staff[normalizedNick];
         const allowedBySession = (role === 'admin' || role === 'moderator')
-            && Boolean(session?.staffToken)
-            && Boolean(staffAccount)
-            && staffAccount.role === role;
+            && Boolean(session?.authToken);
         localStorage.setItem('isAdmin', String(allowedBySession));
         isAdmin = allowedBySession;
         return allowedBySession;
