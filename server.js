@@ -1,8 +1,8 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8000);
@@ -17,12 +17,8 @@ const ACCOUNTS_FILE = path.join(ROOT, 'accounts.json');
 const BACKUPS_DIR = path.join(ROOT, 'backups');
 const BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-const SMTP_HOST = String(process.env.SMTP_HOST || '').trim();
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_SECURE = String(process.env.SMTP_SECURE || '').trim() === 'true' || SMTP_PORT === 465;
-const SMTP_USER = String(process.env.SMTP_USER || '').trim();
-const SMTP_PASS = String(process.env.SMTP_PASS || '').trim();
-const SMTP_FROM = String(process.env.SMTP_FROM || SMTP_USER || '').trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
+const RESEND_FROM_EMAIL = String(process.env.RESEND_FROM_EMAIL || '').trim();
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -223,39 +219,57 @@ function generateNumericCode(length = 6) {
 }
 
 function isSmtpConfigured() {
-    return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM);
-}
-
-let smtpTransport = null;
-function getSmtpTransport() {
-    if (!isSmtpConfigured()) return null;
-    if (!smtpTransport) {
-        smtpTransport = nodemailer.createTransport({
-            host: SMTP_HOST,
-            port: SMTP_PORT,
-            secure: SMTP_SECURE,
-            connectionTimeout: 10000,
-            greetingTimeout: 10000,
-            socketTimeout: 15000,
-            auth: {
-                user: SMTP_USER,
-                pass: SMTP_PASS
-            }
-        });
-    }
-    return smtpTransport;
+    return Boolean(RESEND_API_KEY && RESEND_FROM_EMAIL);
 }
 
 async function sendMailMessage(to, subject, text) {
-    const transport = getSmtpTransport();
-    if (!transport) return { ok: false, error: 'smtp_not_configured' };
-    try {
-        await transport.sendMail({ from: SMTP_FROM, to, subject, text });
-        return { ok: true };
-    } catch (error) {
-        console.error('SMTP send failed:', error.message);
-        return { ok: false, error: 'smtp_send_failed' };
-    }
+    if (!isSmtpConfigured()) return { ok: false, error: 'smtp_not_configured' };
+
+    const payload = JSON.stringify({
+        from: RESEND_FROM_EMAIL,
+        to: [String(to || '').trim()],
+        subject: String(subject || '').trim(),
+        text: String(text || '')
+    });
+
+    return new Promise((resolve) => {
+        const req = https.request({
+            hostname: 'api.resend.com',
+            path: '/emails',
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_API_KEY}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload)
+            },
+            timeout: 15000
+        }, (res) => {
+            let body = '';
+            res.on('data', (chunk) => {
+                body += chunk;
+            });
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve({ ok: true });
+                    return;
+                }
+                console.error('SMTP send failed:', `Resend HTTP ${res.statusCode}`, body);
+                resolve({ ok: false, error: 'smtp_send_failed' });
+            });
+        });
+
+        req.on('timeout', () => {
+            req.destroy(new Error('Request timeout'));
+        });
+
+        req.on('error', (error) => {
+            console.error('SMTP send failed:', error.message);
+            resolve({ ok: false, error: 'smtp_send_failed' });
+        });
+
+        req.write(payload);
+        req.end();
+    });
 }
 
 function getUserByEmail(normalizedEmail) {
@@ -1461,6 +1475,6 @@ server.listen(PORT, HOST, () => {
         console.warn('Warning: AUTH_TOKEN_SECRET is not set. Auth sessions will be disabled.');
     }
     if (!isSmtpConfigured()) {
-        console.warn('Warning: SMTP is not configured. Email verification and password reset will be disabled.');
+        console.warn('Warning: RESEND_API_KEY or RESEND_FROM_EMAIL is not set. Email verification and password reset will be disabled.');
     }
 });

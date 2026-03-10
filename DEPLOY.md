@@ -31,13 +31,9 @@ Set these in Render -> Service -> `Environment`:
    Example: `my-very-strong-secret-2026`
 2. `AUTH_TOKEN_SECRET` = random long string for login session tokens  
    Example: `d7dc43eb5226bdb0f65ef7bc4683ff91`
-3. SMTP for email verification/reset:
-   - `SMTP_HOST` (e.g. `smtp.gmail.com`)
-   - `SMTP_PORT` (e.g. `587`)
-   - `SMTP_SECURE` (`false` for 587, `true` for 465)
-   - `SMTP_USER` (email login)
-   - `SMTP_PASS` (app password/token)
-   - `SMTP_FROM` (sender email shown in letters)
+3. Resend for email verification/reset:
+   - `RESEND_API_KEY` (API key from Resend)
+   - `RESEND_FROM_EMAIL` (verified sender, e.g. `noreply@your-domain.com`)
 4. `HOST` = `0.0.0.0` (optional, already defaulted in code)
 
 `PORT` is provided by Render automatically.
@@ -51,6 +47,7 @@ Set these in Render -> Service -> `Environment`:
 - Staff actions are protected by `STAFF_SECRET_CODE`.
 - User registration now requires email confirmation code.
 - Password reset works through email code.
+- Emails are sent through `Resend API`, not Gmail SMTP.
 
 If `STAFF_SECRET_CODE` is empty, admin/staff registration is disabled.
 
@@ -62,7 +59,13 @@ If `STAFF_SECRET_CODE` is empty, admin/staff registration is disabled.
 
 You always know the current phrase because it exists only in Render environment.
 
-## 6) Frontend config
+## 6) Resend notes
+
+- For production delivery you should verify your domain in Resend.
+- For initial testing, Resend may restrict sending to your own account email until domain/sender setup is complete.
+- Example sender after verification: `noreply@xss-b1nq.com`
+
+## 7) Frontend config
 
 For deployment on the same Render domain:
 
