@@ -31,7 +31,14 @@ Set these in Render -> Service -> `Environment`:
    Example: `my-very-strong-secret-2026`
 2. `AUTH_TOKEN_SECRET` = random long string for login session tokens  
    Example: `d7dc43eb5226bdb0f65ef7bc4683ff91`
-3. `HOST` = `0.0.0.0` (optional, already defaulted in code)
+3. SMTP for email verification/reset:
+   - `SMTP_HOST` (e.g. `smtp.gmail.com`)
+   - `SMTP_PORT` (e.g. `587`)
+   - `SMTP_SECURE` (`false` for 587, `true` for 465)
+   - `SMTP_USER` (email login)
+   - `SMTP_PASS` (app password/token)
+   - `SMTP_FROM` (sender email shown in letters)
+4. `HOST` = `0.0.0.0` (optional, already defaulted in code)
 
 `PORT` is provided by Render automatically.
 
@@ -42,6 +49,8 @@ Set these in Render -> Service -> `Environment`:
 - Frontend sends auth requests to server `/api/auth/*`.
 - Server signs sessions with `AUTH_TOKEN_SECRET`.
 - Staff actions are protected by `STAFF_SECRET_CODE`.
+- User registration now requires email confirmation code.
+- Password reset works through email code.
 
 If `STAFF_SECRET_CODE` is empty, admin/staff registration is disabled.
 

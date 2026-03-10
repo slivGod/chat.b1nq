@@ -767,39 +767,6 @@ function normalizeNick(nickname) {
     return nickname.trim().toLowerCase();
 }
 
-function isSha256Hash(value) {
-    return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
-}
-
-async function hashPassword(password) {
-    const data = new TextEncoder().encode(String(password || ''));
-    const digest = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(digest))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-}
-
-async function checkAccountPasswordAndMigrate(account, password, storageKey, normalizedNick) {
-    if (!account) return false;
-
-    if (isSha256Hash(account.passwordHash)) {
-        const incomingHash = await hashPassword(password);
-        return account.passwordHash === incomingHash;
-    }
-
-    if (account.password && account.password === password) {
-        account.passwordHash = await hashPassword(password);
-        delete account.password;
-
-        const storage = getStoredObject(storageKey);
-        storage[normalizedNick] = account;
-        setStoredObject(storageKey, storage);
-        return true;
-    }
-
-    return false;
-}
-
 function resolveApiEndpoint(pathname) {
     const configured = String(window.CHAT_SERVER_URL || '').trim();
     if (configured) {
@@ -813,75 +780,6 @@ function resolveApiEndpoint(pathname) {
         }
     }
     return pathname;
-}
-
-async function verifyStaffSecret(secretCode) {
-    const endpoint = resolveApiEndpoint('/api/verify-staff-secret');
-
-    try {
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ secretCode })
-        });
-        let data = {};
-        try {
-            data = await response.json();
-        } catch (error) {
-            data = {};
-        }
-
-        if (!response.ok) {
-            return {
-                ok: false,
-                error: data?.error || (response.status === 429 ? 'rate_limited' : 'server_error')
-            };
-        }
-
-        return {
-            ok: data?.ok === true,
-            error: data?.error || (data?.ok ? null : 'invalid_secret')
-        };
-    } catch (error) {
-        return { ok: false, error: 'network_error' };
-    }
-}
-
-async function issueStaffSessionToken(secretCode, nickname, role) {
-    const endpoint = resolveApiEndpoint('/api/staff-session');
-
-    try {
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ secretCode, nickname, role })
-        });
-        let data = {};
-        try {
-            data = await response.json();
-        } catch (error) {
-            data = {};
-        }
-
-        if (!response.ok) {
-            return {
-                ok: false,
-                error: data?.error || (response.status === 429 ? 'rate_limited' : 'server_error')
-            };
-        }
-
-        if (!data?.ok || !data?.token) {
-            return { ok: false, error: data?.error || 'server_error' };
-        }
-
-        return {
-            ok: true,
-            token: String(data.token),
-            expiresAt: data.expiresAt || null
-        };
-    } catch (error) {
-        return { ok: false, error: 'network_error' };
-    }
 }
 
 async function authApiRequest(endpointPath, payload) {
@@ -935,6 +833,14 @@ function showAdminLogin() {
 
 function showAdminRegister() {
     switchAuthForm('admin-register-form');
+}
+
+function showUserVerify() {
+    switchAuthForm('user-verify-form');
+}
+
+function showForgotPassword() {
+    switchAuthForm('user-forgot-form');
 }
 
 function showMainApp() {
@@ -993,11 +899,16 @@ function finalizeAuth(nickname, role, authToken = null) {
 
 async function registerUser() {
     const nickname = (document.getElementById('user-register-nick')?.value || '').trim();
+    const email = (document.getElementById('user-register-email')?.value || '').trim();
     const password = document.getElementById('user-register-password')?.value || '';
     const confirmPassword = document.getElementById('user-register-password-confirm')?.value || '';
 
-    if (!nickname || !password || !confirmPassword) {
+    if (!nickname || !email || !password || !confirmPassword) {
         alert('Заполни все поля регистрации');
+        return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        alert('Введи корректный email');
         return;
     }
     if (nickname.length > 20) {
@@ -1013,10 +924,18 @@ async function registerUser() {
         return;
     }
 
-    const result = await authApiRequest('/api/auth/register-user', { nickname, password });
+    const result = await authApiRequest('/api/auth/register-user', { nickname, email, password });
     if (!result?.ok) {
         if (result.error === 'nickname_taken') {
             alert('Пользователь с таким ником уже существует');
+        } else if (result.error === 'email_taken') {
+            alert('Этот email уже используется');
+        } else if (result.error === 'invalid_email') {
+            alert('Некорректный email');
+        } else if (result.error === 'smtp_not_configured') {
+            alert('На сервере не настроена почта (SMTP). Обратись к администратору.');
+        } else if (result.error === 'smtp_send_failed') {
+            alert('Не удалось отправить письмо с кодом. Попробуй позже.');
         } else if (result.error === 'weak_password') {
             alert('Пароль слишком простой');
         } else if (result.error === 'rate_limited') {
@@ -1029,8 +948,11 @@ async function registerUser() {
         return;
     }
 
-    alert('Регистрация завершена');
-    finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
+    document.getElementById('user-verify-nick').value = result.nickname || nickname;
+    document.getElementById('user-verify-email').value = result.email || email;
+    document.getElementById('user-verify-code').value = '';
+    showUserVerify();
+    alert(`Код подтверждения отправлен на ${result.email || email}. Введи код, чтобы завершить регистрацию.`);
 }
 
 async function loginUser() {
@@ -1045,9 +967,14 @@ async function loginUser() {
     const result = await authApiRequest('/api/auth/login-user', { nickname, password });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert('Аккаунт не найден. Проверь ник или зарегистрируйся заново.');
+            alert(`Пользователь "${nickname}" не найден. Проверь ник или зарегистрируйся.`);
         } else if (result.error === 'invalid_password') {
-            alert('Неверный пароль');
+            alert(`Неверный пароль для пользователя "${nickname}".`);
+        } else if (result.error === 'email_not_verified') {
+            document.getElementById('user-verify-nick').value = nickname;
+            document.getElementById('user-verify-email').value = result.email || '';
+            showUserVerify();
+            alert('Email не подтвержден. Введи код из письма.');
         } else if (result.error === 'rate_limited') {
             alert('Слишком много попыток. Подожди минуту.');
         } else if (result.error === 'network_error') {
@@ -1059,6 +986,127 @@ async function loginUser() {
     }
 
     finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
+}
+
+async function verifyUserEmail() {
+    const nickname = (document.getElementById('user-verify-nick')?.value || '').trim();
+    const email = (document.getElementById('user-verify-email')?.value || '').trim();
+    const code = (document.getElementById('user-verify-code')?.value || '').trim();
+    if (!nickname || !email || !code) {
+        alert('Заполни ник, email и код подтверждения');
+        return;
+    }
+
+    const result = await authApiRequest('/api/auth/verify-email', { nickname, email, code });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт не найден для подтверждения');
+        } else if (result.error === 'email_mismatch') {
+            alert('Email не совпадает с email аккаунта');
+        } else if (result.error === 'verify_code_expired') {
+            alert('Код подтверждения истек. Отправь новый код.');
+        } else if (result.error === 'invalid_verify_code') {
+            alert('Неверный код подтверждения');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много попыток. Подожди минуту.');
+        } else {
+            alert('Не удалось подтвердить email');
+        }
+        return;
+    }
+
+    alert('Email подтвержден. Вход выполнен.');
+    finalizeAuth(result.nickname || nickname, result.role || 'user', result.token || null);
+}
+
+async function resendUserVerifyCode() {
+    const nickname = (document.getElementById('user-verify-nick')?.value || '').trim();
+    const email = (document.getElementById('user-verify-email')?.value || '').trim();
+    if (!nickname || !email) {
+        alert('Введи ник и email, чтобы отправить новый код');
+        return;
+    }
+    const result = await authApiRequest('/api/auth/resend-verify-code', { nickname, email });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт не найден');
+        } else if (result.error === 'email_mismatch') {
+            alert('Email не совпадает с email аккаунта');
+        } else if (result.error === 'already_verified') {
+            alert('Email уже подтвержден. Можно входить.');
+            showUserLogin();
+        } else if (result.error === 'smtp_not_configured') {
+            alert('На сервере не настроена отправка почты (SMTP).');
+        } else if (result.error === 'smtp_send_failed') {
+            alert('Не удалось отправить письмо. Попробуй позже.');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком часто. Подожди минуту.');
+        } else {
+            alert('Ошибка отправки кода');
+        }
+        return;
+    }
+    alert('Новый код отправлен на почту.');
+}
+
+async function requestPasswordResetCode() {
+    const login = (document.getElementById('forgot-login')?.value || '').trim();
+    if (!login) {
+        alert('Введи ник или email');
+        return;
+    }
+    const result = await authApiRequest('/api/auth/request-password-reset', { login });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт не найден по этому нику/email');
+        } else if (result.error === 'email_not_verified') {
+            alert('Сначала подтверди email аккаунта');
+        } else if (result.error === 'smtp_not_configured') {
+            alert('На сервере не настроена отправка почты (SMTP).');
+        } else if (result.error === 'smtp_send_failed') {
+            alert('Не удалось отправить код на почту');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много запросов. Подожди минуту.');
+        } else {
+            alert('Ошибка запроса сброса пароля');
+        }
+        return;
+    }
+    alert('Код для сброса пароля отправлен на email аккаунта.');
+}
+
+async function confirmPasswordReset() {
+    const login = (document.getElementById('forgot-login')?.value || '').trim();
+    const code = (document.getElementById('forgot-code')?.value || '').trim();
+    const newPassword = document.getElementById('forgot-new-password')?.value || '';
+    const confirmPassword = document.getElementById('forgot-new-password-confirm')?.value || '';
+    if (!login || !code || !newPassword || !confirmPassword) {
+        alert('Заполни все поля сброса пароля');
+        return;
+    }
+    if (newPassword !== confirmPassword) {
+        alert('Новый пароль и подтверждение не совпадают');
+        return;
+    }
+    const result = await authApiRequest('/api/auth/confirm-password-reset', { login, code, newPassword });
+    if (!result?.ok) {
+        if (result.error === 'account_not_found') {
+            alert('Аккаунт не найден');
+        } else if (result.error === 'weak_password') {
+            alert('Новый пароль слишком короткий');
+        } else if (result.error === 'reset_code_expired') {
+            alert('Код сброса истек. Запроси новый код.');
+        } else if (result.error === 'invalid_reset_code') {
+            alert('Неверный код сброса');
+        } else if (result.error === 'rate_limited') {
+            alert('Слишком много попыток. Подожди минуту.');
+        } else {
+            alert('Не удалось сменить пароль');
+        }
+        return;
+    }
+    alert('Пароль успешно изменен. Теперь войди с новым паролем.');
+    showUserLogin();
 }
 
 async function createStaffAccount() {
@@ -1322,6 +1370,70 @@ async function clearAllLocalAccounts() {
     updatePointsDisplay();
 
     alert('Все локальные аккаунты удалены');
+}
+
+async function exportServerAccounts() {
+    if (!syncAdminPrivilegeFlag()) {
+        alert('Только состав может экспортировать аккаунты');
+        return;
+    }
+    const token = getCurrentSessionAuthToken();
+    const result = await authApiRequest('/api/admin/export-accounts', { token });
+    if (!result?.ok) {
+        if (result.error === 'forbidden') {
+            alert('Сервер отклонил доступ к экспорту');
+        } else {
+            alert('Не удалось экспортировать серверные аккаунты');
+        }
+        return;
+    }
+    const blob = new Blob([JSON.stringify(result.data || {}, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `accounts-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    alert('Экспорт завершен');
+}
+
+async function importServerAccounts() {
+    if (!syncAdminPrivilegeFlag()) {
+        alert('Только состав может запускать импорт');
+        return;
+    }
+    const approved = await showConfirmPopup('Импорт заменит текущие аккаунты на сервере. Продолжить?');
+    if (!approved) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const text = await file.text();
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch (error) {
+            alert('Файл не является корректным JSON');
+            return;
+        }
+        const token = getCurrentSessionAuthToken();
+        const result = await authApiRequest('/api/admin/import-accounts', { token, data: parsed });
+        if (!result?.ok) {
+            if (result.error === 'forbidden') {
+                alert('Импорт доступен только роли admin');
+            } else {
+                alert('Не удалось импортировать аккаунты');
+            }
+            return;
+        }
+        alert('Импорт завершен. Рекомендуется перезайти в аккаунт.');
+    };
+    input.click();
 }
 
 function localizeUI() {

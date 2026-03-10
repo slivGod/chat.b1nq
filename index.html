@@ -40,6 +40,10 @@
                 <input type="text" id="user-register-nick" placeholder="Придумай ник" maxlength="20">
             </div>
             <div class="form-field">
+                <label>Email</label>
+                <input type="email" id="user-register-email" placeholder="Введи email">
+            </div>
+            <div class="form-field">
                 <label>Пароль</label>
                 <input type="password" id="user-register-password" placeholder="Придумай пароль">
             </div>
@@ -57,8 +61,8 @@
         <div id="user-login-form" class="auth-form">
             <h3>Вход</h3>
             <div class="form-field">
-                <label>Ник</label>
-                <input type="text" id="user-login-nick" placeholder="Введи ник">
+                <label>Ник или Email</label>
+                <input type="text" id="user-login-nick" placeholder="Введи ник или email">
             </div>
             <div class="form-field">
                 <label>Пароль</label>
@@ -67,7 +71,54 @@
             <button onclick="loginUser()" class="auth-btn">Войти</button>
             <div class="auth-footer">
                 <p>Нет аккаунта? <button onclick="showUserRegister()" class="link-btn">Регистрация</button></p>
+                <p>Забыл пароль? <button onclick="showForgotPassword()" class="link-btn">Сбросить</button></p>
                 <p>Админ/модератор? <button onclick="showAdminLogin()" class="link-btn">Вход для состава</button></p>
+            </div>
+        </div>
+
+        <div id="user-verify-form" class="auth-form">
+            <h3>Подтверждение Email</h3>
+            <div class="form-field">
+                <label>Ник</label>
+                <input type="text" id="user-verify-nick" placeholder="Ник из регистрации">
+            </div>
+            <div class="form-field">
+                <label>Email</label>
+                <input type="email" id="user-verify-email" placeholder="Email из регистрации">
+            </div>
+            <div class="form-field">
+                <label>Код из письма</label>
+                <input type="text" id="user-verify-code" placeholder="6-значный код">
+            </div>
+            <button onclick="verifyUserEmail()" class="auth-btn">Подтвердить</button>
+            <button onclick="resendUserVerifyCode()" class="auth-btn register-btn">Отправить код еще раз</button>
+            <div class="auth-footer">
+                <p><button onclick="showUserLogin()" class="link-btn">Вернуться ко входу</button></p>
+            </div>
+        </div>
+
+        <div id="user-forgot-form" class="auth-form">
+            <h3>Сброс пароля</h3>
+            <div class="form-field">
+                <label>Ник или Email</label>
+                <input type="text" id="forgot-login" placeholder="Введи ник или email">
+            </div>
+            <button onclick="requestPasswordResetCode()" class="auth-btn">Получить код на почту</button>
+            <div class="form-field">
+                <label>Код из письма</label>
+                <input type="text" id="forgot-code" placeholder="6-значный код">
+            </div>
+            <div class="form-field">
+                <label>Новый пароль</label>
+                <input type="password" id="forgot-new-password" placeholder="Новый пароль">
+            </div>
+            <div class="form-field">
+                <label>Подтверждение</label>
+                <input type="password" id="forgot-new-password-confirm" placeholder="Повтори новый пароль">
+            </div>
+            <button onclick="confirmPasswordReset()" class="auth-btn">Сменить пароль</button>
+            <div class="auth-footer">
+                <p><button onclick="showUserLogin()" class="link-btn">Вернуться ко входу</button></p>
             </div>
         </div>
 
@@ -337,6 +388,14 @@
                 <div class="setting-item">
                     <label id="admin-reset-accounts-label">Сброс локальных аккаунтов на этом устройстве</label>
                     <button id="admin-reset-accounts-btn" class="danger" onclick="clearAllLocalAccounts()">Сбросить все аккаунты</button>
+                </div>
+                <div class="setting-item">
+                    <label id="admin-export-accounts-label">Экспорт серверных аккаунтов (JSON)</label>
+                    <button id="admin-export-accounts-btn" onclick="exportServerAccounts()">Экспорт</button>
+                </div>
+                <div class="setting-item">
+                    <label id="admin-import-accounts-label">Импорт серверных аккаунтов (только admin)</label>
+                    <button id="admin-import-accounts-btn" class="danger" onclick="importServerAccounts()">Импорт</button>
                 </div>
             </div>
         </div>

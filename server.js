@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8000);
@@ -13,6 +14,15 @@ const STAFF_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const AUTH_TOKEN_SECRET = String(process.env.AUTH_TOKEN_SECRET || STAFF_TOKEN_SECRET || STAFF_SECRET_CODE || '').trim();
 const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ACCOUNTS_FILE = path.join(ROOT, 'accounts.json');
+const BACKUPS_DIR = path.join(ROOT, 'backups');
+const BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+const SMTP_HOST = String(process.env.SMTP_HOST || '').trim();
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE = String(process.env.SMTP_SECURE || '').trim() === 'true' || SMTP_PORT === 465;
+const SMTP_USER = String(process.env.SMTP_USER || '').trim();
+const SMTP_PASS = String(process.env.SMTP_PASS || '').trim();
+const SMTP_FROM = String(process.env.SMTP_FROM || SMTP_USER || '').trim();
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -198,6 +208,77 @@ function hashPassword(password) {
     return crypto.createHash('sha256').update(String(password || '')).digest('hex');
 }
 
+function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function hashCode(code) {
+    return crypto.createHash('sha256').update(String(code || '')).digest('hex');
+}
+
+function generateNumericCode(length = 6) {
+    const max = 10 ** length;
+    const value = crypto.randomInt(0, max);
+    return String(value).padStart(length, '0');
+}
+
+function isSmtpConfigured() {
+    return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM);
+}
+
+let smtpTransport = null;
+function getSmtpTransport() {
+    if (!isSmtpConfigured()) return null;
+    if (!smtpTransport) {
+        smtpTransport = nodemailer.createTransport({
+            host: SMTP_HOST,
+            port: SMTP_PORT,
+            secure: SMTP_SECURE,
+            auth: {
+                user: SMTP_USER,
+                pass: SMTP_PASS
+            }
+        });
+    }
+    return smtpTransport;
+}
+
+async function sendMailMessage(to, subject, text) {
+    const transport = getSmtpTransport();
+    if (!transport) return { ok: false, error: 'smtp_not_configured' };
+    try {
+        await transport.sendMail({ from: SMTP_FROM, to, subject, text });
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, error: 'smtp_send_failed' };
+    }
+}
+
+function getUserByEmail(normalizedEmail) {
+    if (!normalizedEmail) return null;
+    return Object.values(accountsStore.users).find((user) => normalizeEmail(user.email) === normalizedEmail) || null;
+}
+
+function createAccountsBackup(reason = 'manual') {
+    try {
+        if (!fs.existsSync(BACKUPS_DIR)) {
+            fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `accounts-${timestamp}-${reason}.json`;
+        const backupPath = path.join(BACKUPS_DIR, fileName);
+        const payload = {
+            createdAt: new Date().toISOString(),
+            reason,
+            data: accountsStore
+        };
+        fs.writeFileSync(backupPath, JSON.stringify(payload, null, 2), 'utf8');
+        return { ok: true, fileName };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
 function loadAccountsStore() {
     try {
         if (!fs.existsSync(ACCOUNTS_FILE)) return;
@@ -226,6 +307,8 @@ function saveAccountsStore() {
         fs.writeFile(ACCOUNTS_FILE, snapshot, 'utf8', (error) => {
             if (error) {
                 console.error('Failed to save accounts store:', error.message);
+            } else {
+                createAccountsBackup('autosave');
             }
             setImmediate(flush);
         });
@@ -440,6 +523,10 @@ function readJsonBody(req, maxBytes = 8192) {
 }
 
 loadAccountsStore();
+createAccountsBackup('startup');
+setInterval(() => {
+    createAccountsBackup('scheduled');
+}, BACKUP_INTERVAL_MS);
 
 const server = http.createServer((req, res) => {
     setDefaultSecurityHeaders(res);
@@ -451,13 +538,25 @@ const server = http.createServer((req, res) => {
     const isAuthCreateStaffApi = requestUrl.pathname === '/api/auth/create-staff';
     const isAuthLoginStaffApi = requestUrl.pathname === '/api/auth/login-staff';
     const isAuthSessionApi = requestUrl.pathname === '/api/auth/session';
+    const isAuthVerifyEmailApi = requestUrl.pathname === '/api/auth/verify-email';
+    const isAuthResendVerifyCodeApi = requestUrl.pathname === '/api/auth/resend-verify-code';
+    const isAuthRequestPasswordResetApi = requestUrl.pathname === '/api/auth/request-password-reset';
+    const isAuthConfirmPasswordResetApi = requestUrl.pathname === '/api/auth/confirm-password-reset';
+    const isAdminExportAccountsApi = requestUrl.pathname === '/api/admin/export-accounts';
+    const isAdminImportAccountsApi = requestUrl.pathname === '/api/admin/import-accounts';
     const isAnyApi = isStaffSecretApi
         || isStaffSessionApi
         || isAuthRegisterUserApi
         || isAuthLoginUserApi
         || isAuthCreateStaffApi
         || isAuthLoginStaffApi
-        || isAuthSessionApi;
+        || isAuthSessionApi
+        || isAuthVerifyEmailApi
+        || isAuthResendVerifyCodeApi
+        || isAuthRequestPasswordResetApi
+        || isAuthConfirmPasswordResetApi
+        || isAdminExportAccountsApi
+        || isAdminImportAccountsApi;
 
     if (isAnyApi && req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -606,10 +705,16 @@ const server = http.createServer((req, res) => {
             .then((payload) => {
                 const nickname = String(payload?.nickname || '').trim().slice(0, 20);
                 const password = String(payload?.password || '');
+                const email = normalizeEmail(payload?.email || '');
                 const normalized = normalizeNick(nickname);
-                if (!nickname || !password) {
+                if (!nickname || !password || !email) {
                     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
                     res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+                    return;
+                }
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_email' }));
                     return;
                 }
                 if (password.length < 4) {
@@ -622,23 +727,60 @@ const server = http.createServer((req, res) => {
                     res.end(JSON.stringify({ ok: false, error: 'nickname_taken' }));
                     return;
                 }
+                const existingByEmail = getUserByEmail(email);
+                if (existingByEmail) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'email_taken' }));
+                    return;
+                }
+                if (!isSmtpConfigured()) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_not_configured' }));
+                    return;
+                }
+
+                const verifyCode = generateNumericCode(6);
+                const verifyCodeHash = hashCode(verifyCode);
+                const verifyCodeExpiresAt = Date.now() + (15 * 60 * 1000);
 
                 accountsStore.users[normalized] = {
                     nickname,
                     passwordHash: hashPassword(password),
                     role: 'user',
+                    email,
+                    emailVerified: false,
+                    verifyCodeHash,
+                    verifyCodeExpiresAt,
+                    passwordResetCodeHash: null,
+                    passwordResetExpiresAt: 0,
                     registered: new Date().toISOString()
                 };
-                saveAccountsStore();
 
-                const token = createAuthToken({ nickname, role: 'user' });
-                if (!token) {
-                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
-                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                sendMailMessage(
+                    email,
+                    'Код подтверждения регистрации',
+                    `Ваш код подтверждения: ${verifyCode}. Код действует 15 минут.`
+                ).then((mailResult) => {
+                    if (!mailResult.ok) {
+                        delete accountsStore.users[normalized];
+                        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                        res.end(JSON.stringify({ ok: false, error: mailResult.error }));
+                        return;
+                    }
+                    saveAccountsStore();
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({
+                        ok: true,
+                        requiresVerification: true,
+                        nickname,
+                        email
+                    }));
+                }).catch(() => {
+                    delete accountsStore.users[normalized];
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_send_failed' }));
                     return;
-                }
-                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
-                res.end(JSON.stringify({ ok: true, nickname, role: 'user', token }));
+                });
             })
             .catch(() => {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
@@ -657,10 +799,11 @@ const server = http.createServer((req, res) => {
 
         readJsonBody(req)
             .then((payload) => {
-                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const login = String(payload?.nickname || '').trim();
                 const password = String(payload?.password || '');
-                const normalized = normalizeNick(nickname);
-                const account = accountsStore.users[normalized];
+                const normalizedNick = normalizeNick(login);
+                const normalizedEmail = normalizeEmail(login);
+                const account = accountsStore.users[normalizedNick] || getUserByEmail(normalizedEmail);
                 if (!account) {
                     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
                     res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
@@ -669,6 +812,11 @@ const server = http.createServer((req, res) => {
                 if (account.passwordHash !== hashPassword(password)) {
                     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
                     res.end(JSON.stringify({ ok: false, error: 'invalid_password' }));
+                    return;
+                }
+                if (!account.emailVerified) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'email_not_verified', email: account.email || null }));
                     return;
                 }
 
@@ -680,6 +828,237 @@ const server = http.createServer((req, res) => {
                 }
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: 'user', token }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthVerifyEmailApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-verify-email:${ip}`, 40, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const email = normalizeEmail(payload?.email || '');
+                const code = String(payload?.code || '').trim();
+                const normalized = normalizeNick(nickname);
+                const account = accountsStore.users[normalized];
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (normalizeEmail(account.email) !== email) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'email_mismatch' }));
+                    return;
+                }
+                if (account.emailVerified) {
+                    const token = createAuthToken({ nickname: account.nickname, role: 'user' });
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: 'user', token }));
+                    return;
+                }
+                if (!account.verifyCodeHash || !account.verifyCodeExpiresAt || Date.now() > account.verifyCodeExpiresAt) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'verify_code_expired' }));
+                    return;
+                }
+                if (hashCode(code) !== account.verifyCodeHash) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_verify_code' }));
+                    return;
+                }
+
+                account.emailVerified = true;
+                account.verifyCodeHash = null;
+                account.verifyCodeExpiresAt = 0;
+                saveAccountsStore();
+
+                const token = createAuthToken({ nickname: account.nickname, role: 'user' });
+                if (!token) {
+                    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, nickname: account.nickname, role: 'user', token }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthResendVerifyCodeApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-resend-verify:${ip}`, 15, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+        readJsonBody(req)
+            .then((payload) => {
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const email = normalizeEmail(payload?.email || '');
+                const account = accountsStore.users[normalizeNick(nickname)];
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (normalizeEmail(account.email) !== email) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'email_mismatch' }));
+                    return;
+                }
+                if (account.emailVerified) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'already_verified' }));
+                    return;
+                }
+                if (!isSmtpConfigured()) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_not_configured' }));
+                    return;
+                }
+                const verifyCode = generateNumericCode(6);
+                account.verifyCodeHash = hashCode(verifyCode);
+                account.verifyCodeExpiresAt = Date.now() + (15 * 60 * 1000);
+
+                sendMailMessage(
+                    account.email,
+                    'Новый код подтверждения',
+                    `Ваш новый код подтверждения: ${verifyCode}. Код действует 15 минут.`
+                ).then((mailResult) => {
+                    if (!mailResult.ok) {
+                        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                        res.end(JSON.stringify({ ok: false, error: mailResult.error }));
+                        return;
+                    }
+                    saveAccountsStore();
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: true }));
+                }).catch(() => {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_send_failed' }));
+                });
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthRequestPasswordResetApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-reset-request:${ip}`, 20, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+        readJsonBody(req)
+            .then((payload) => {
+                const login = String(payload?.login || '').trim();
+                const normalizedNick = normalizeNick(login);
+                const normalizedEmail = normalizeEmail(login);
+                const account = accountsStore.users[normalizedNick] || getUserByEmail(normalizedEmail);
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (!account.emailVerified) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'email_not_verified' }));
+                    return;
+                }
+                if (!isSmtpConfigured()) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_not_configured' }));
+                    return;
+                }
+                const resetCode = generateNumericCode(6);
+                account.passwordResetCodeHash = hashCode(resetCode);
+                account.passwordResetExpiresAt = Date.now() + (15 * 60 * 1000);
+                sendMailMessage(
+                    account.email,
+                    'Код сброса пароля',
+                    `Код сброса пароля: ${resetCode}. Код действует 15 минут.`
+                ).then((mailResult) => {
+                    if (!mailResult.ok) {
+                        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                        res.end(JSON.stringify({ ok: false, error: mailResult.error }));
+                        return;
+                    }
+                    saveAccountsStore();
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: true }));
+                }).catch(() => {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'smtp_send_failed' }));
+                });
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAuthConfirmPasswordResetApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`auth-reset-confirm:${ip}`, 30, 60_000)) {
+            res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+        readJsonBody(req)
+            .then((payload) => {
+                const login = String(payload?.login || '').trim();
+                const code = String(payload?.code || '').trim();
+                const newPassword = String(payload?.newPassword || '');
+                const normalizedNick = normalizeNick(login);
+                const normalizedEmail = normalizeEmail(login);
+                const account = accountsStore.users[normalizedNick] || getUserByEmail(normalizedEmail);
+                if (!account) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+                if (newPassword.length < 4) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'weak_password' }));
+                    return;
+                }
+                if (!account.passwordResetCodeHash || !account.passwordResetExpiresAt || Date.now() > account.passwordResetExpiresAt) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'reset_code_expired' }));
+                    return;
+                }
+                if (hashCode(code) !== account.passwordResetCodeHash) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'invalid_reset_code' }));
+                    return;
+                }
+
+                account.passwordHash = hashPassword(newPassword);
+                account.passwordResetCodeHash = null;
+                account.passwordResetExpiresAt = 0;
+                saveAccountsStore();
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true }));
             })
             .catch(() => {
                 res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
@@ -839,12 +1218,75 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    if (req.method === 'POST' && isAdminExportAccountsApi) {
+        readJsonBody(req)
+            .then((payload) => {
+                const token = String(payload?.token || '').trim();
+                const verified = verifyAuthToken(token);
+                if (!verified || (verified.role !== 'admin' && verified.role !== 'moderator')) {
+                    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+                    return;
+                }
+                const backup = createAccountsBackup('manual-export');
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({
+                    ok: true,
+                    backupFile: backup.ok ? backup.fileName : null,
+                    data: accountsStore
+                }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAdminImportAccountsApi) {
+        readJsonBody(req, 2 * 1024 * 1024)
+            .then((payload) => {
+                const token = String(payload?.token || '').trim();
+                const data = payload?.data;
+                const verified = verifyAuthToken(token);
+                if (!verified || verified.role !== 'admin') {
+                    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+                    return;
+                }
+                if (!data || typeof data !== 'object' || typeof data.users !== 'object' || typeof data.staff !== 'object') {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+                    return;
+                }
+                createAccountsBackup('before-import');
+                accountsStore.users = data.users;
+                accountsStore.staff = data.staff;
+                saveAccountsStore();
+                createAccountsBackup('after-import');
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
     const filePath = safePathFromUrl(req.url || '/');
     const rootPath = path.resolve(ROOT);
     const absPath = path.resolve(ROOT, filePath);
     const accountsPath = path.resolve(ACCOUNTS_FILE);
+    const backupsRootPath = path.resolve(BACKUPS_DIR);
 
-    if (!absPath.startsWith(rootPath) || absPath === accountsPath) {
+    if (
+        !absPath.startsWith(rootPath)
+        || absPath === accountsPath
+        || absPath === backupsRootPath
+        || absPath.startsWith(backupsRootPath + path.sep)
+    ) {
         res.writeHead(403);
         res.end('Forbidden');
         return;
@@ -1013,5 +1455,8 @@ server.listen(PORT, HOST, () => {
     }
     if (!AUTH_TOKEN_SECRET) {
         console.warn('Warning: AUTH_TOKEN_SECRET is not set. Auth sessions will be disabled.');
+    }
+    if (!isSmtpConfigured()) {
+        console.warn('Warning: SMTP is not configured. Email verification and password reset will be disabled.');
     }
 });
