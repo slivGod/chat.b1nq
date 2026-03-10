@@ -848,6 +848,13 @@ function clearAuthNotice() {
     notice.className = 'auth-notice';
 }
 
+function focusAuthField(fieldId) {
+    const field = document.getElementById(fieldId);
+    if (field && typeof field.focus === 'function') {
+        field.focus();
+    }
+}
+
 function switchAuthForm(formId) {
     document.querySelectorAll('#auth-container .auth-form').forEach((form) => {
         form.classList.remove('active-form');
@@ -1027,27 +1034,31 @@ async function loginUser() {
     const password = document.getElementById('user-login-password')?.value || '';
 
     if (!nickname || !password) {
-        alert('Введи ник и пароль');
+        showAuthNotice('Введи ник и пароль', 'error');
+        focusAuthField(!nickname ? 'user-login-nick' : 'user-login-password');
         return;
     }
 
     const result = await authApiRequest('/api/auth/login-user', { nickname, password });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert(`Пользователь "${nickname}" не найден. Проверь ник или зарегистрируйся.`);
+            showAuthNotice(`Пользователь "${nickname}" не найден. Проверь ник или зарегистрируйся.`, 'error');
+            focusAuthField('user-login-nick');
         } else if (result.error === 'invalid_password') {
-            alert(`Неверный пароль для пользователя "${nickname}".`);
+            showAuthNotice(`Неверный пароль для пользователя "${nickname}".`, 'error');
+            focusAuthField('user-login-password');
         } else if (result.error === 'email_not_verified') {
             document.getElementById('user-verify-nick').value = nickname;
             document.getElementById('user-verify-email').value = result.email || '';
             showUserVerify();
-            alert('Email не подтвержден. Введи код из письма.');
+            showAuthNotice('Email не подтвержден. Введи код из письма.', 'error');
+            focusAuthField('user-verify-code');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди минуту.');
+            showAuthNotice('Слишком много попыток. Подожди минуту.', 'error');
         } else if (result.error === 'network_error') {
-            alert('Не удалось связаться с сервером');
+            showAuthNotice('Не удалось связаться с сервером', 'error');
         } else {
-            alert('Ошибка входа на сервере');
+            showAuthNotice('Ошибка входа на сервере', 'error');
         }
         return;
     }
@@ -1095,56 +1106,62 @@ async function resendUserVerifyCode() {
     const nickname = (document.getElementById('user-verify-nick')?.value || '').trim();
     const email = (document.getElementById('user-verify-email')?.value || '').trim();
     if (!nickname || !email) {
-        alert('Введи ник и email, чтобы отправить новый код');
+        showAuthNotice('Введи ник и email, чтобы отправить новый код', 'error');
+        focusAuthField(!nickname ? 'user-verify-nick' : 'user-verify-email');
         return;
     }
     const result = await authApiRequest('/api/auth/resend-verify-code', { nickname, email });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert('Аккаунт не найден');
+            showAuthNotice('Аккаунт не найден', 'error');
         } else if (result.error === 'email_mismatch') {
-            alert('Email не совпадает с email аккаунта');
+            showAuthNotice('Email не совпадает с email аккаунта', 'error');
+            focusAuthField('user-verify-email');
         } else if (result.error === 'already_verified') {
-            alert('Email уже подтвержден. Можно входить.');
+            showAuthNotice('Email уже подтвержден. Можно входить.', 'success');
             showUserLogin();
         } else if (result.error === 'smtp_not_configured') {
-            alert('На сервере не настроена отправка почты (SMTP).');
+            showAuthNotice('На сервере не настроена отправка почты.', 'error');
         } else if (result.error === 'smtp_send_failed') {
-            alert('Не удалось отправить письмо. Попробуй позже.');
+            showAuthNotice('Не удалось отправить письмо. Попробуй позже.', 'error');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком часто. Подожди минуту.');
+            showAuthNotice('Слишком часто. Подожди минуту.', 'error');
         } else {
-            alert('Ошибка отправки кода');
+            showAuthNotice('Ошибка отправки кода', 'error');
         }
         return;
     }
-    alert('Новый код отправлен на почту.');
+    showAuthNotice('Новый код отправлен на почту.', 'success');
+    focusAuthField('user-verify-code');
 }
 
 async function requestPasswordResetCode() {
     const login = (document.getElementById('forgot-login')?.value || '').trim();
     if (!login) {
-        alert('Введи ник или email');
+        showAuthNotice('Введи ник или email', 'error');
+        focusAuthField('forgot-login');
         return;
     }
     const result = await authApiRequest('/api/auth/request-password-reset', { login });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert('Аккаунт не найден по этому нику/email');
+            showAuthNotice('Аккаунт не найден по этому нику/email', 'error');
+            focusAuthField('forgot-login');
         } else if (result.error === 'email_not_verified') {
-            alert('Сначала подтверди email аккаунта');
+            showAuthNotice('Сначала подтверди email аккаунта', 'error');
         } else if (result.error === 'smtp_not_configured') {
-            alert('На сервере не настроена отправка почты (SMTP).');
+            showAuthNotice('На сервере не настроена отправка почты.', 'error');
         } else if (result.error === 'smtp_send_failed') {
-            alert('Не удалось отправить код на почту');
+            showAuthNotice('Не удалось отправить код на почту', 'error');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком много запросов. Подожди минуту.');
+            showAuthNotice('Слишком много запросов. Подожди минуту.', 'error');
         } else {
-            alert('Ошибка запроса сброса пароля');
+            showAuthNotice('Ошибка запроса сброса пароля', 'error');
         }
         return;
     }
-    alert('Код для сброса пароля отправлен на email аккаунта.');
+    showAuthNotice('Код для сброса пароля отправлен на email аккаунта.', 'success');
+    focusAuthField('forgot-code');
 }
 
 async function confirmPasswordReset() {
@@ -1153,31 +1170,39 @@ async function confirmPasswordReset() {
     const newPassword = document.getElementById('forgot-new-password')?.value || '';
     const confirmPassword = document.getElementById('forgot-new-password-confirm')?.value || '';
     if (!login || !code || !newPassword || !confirmPassword) {
-        alert('Заполни все поля сброса пароля');
+        showAuthNotice('Заполни все поля сброса пароля', 'error');
+        if (!login) focusAuthField('forgot-login');
+        else if (!code) focusAuthField('forgot-code');
+        else if (!newPassword) focusAuthField('forgot-new-password');
+        else focusAuthField('forgot-new-password-confirm');
         return;
     }
     if (newPassword !== confirmPassword) {
-        alert('Новый пароль и подтверждение не совпадают');
+        showAuthNotice('Новый пароль и подтверждение не совпадают', 'error');
+        focusAuthField('forgot-new-password-confirm');
         return;
     }
     const result = await authApiRequest('/api/auth/confirm-password-reset', { login, code, newPassword });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert('Аккаунт не найден');
+            showAuthNotice('Аккаунт не найден', 'error');
         } else if (result.error === 'weak_password') {
-            alert('Новый пароль слишком короткий');
+            showAuthNotice('Новый пароль слишком короткий', 'error');
+            focusAuthField('forgot-new-password');
         } else if (result.error === 'reset_code_expired') {
-            alert('Код сброса истек. Запроси новый код.');
+            showAuthNotice('Код сброса истек. Запроси новый код.', 'error');
+            focusAuthField('forgot-code');
         } else if (result.error === 'invalid_reset_code') {
-            alert('Неверный код сброса');
+            showAuthNotice('Неверный код сброса', 'error');
+            focusAuthField('forgot-code');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди минуту.');
+            showAuthNotice('Слишком много попыток. Подожди минуту.', 'error');
         } else {
-            alert('Не удалось сменить пароль');
+            showAuthNotice('Не удалось сменить пароль', 'error');
         }
         return;
     }
-    alert('Пароль успешно изменен. Теперь войди с новым паролем.');
+    showAuthNotice('Пароль успешно изменен. Теперь войди с новым паролем.', 'success');
     showUserLogin();
 }
 
@@ -1189,24 +1214,31 @@ async function createStaffAccount() {
     const confirmPassword = document.getElementById('new-admin-password-confirm')?.value || '';
 
     if (!secretCode.trim()) {
-        alert('Введи секретную фразу');
+        showAuthNotice('Введи секретную фразу', 'error');
+        focusAuthField('admin-secret-code');
         return;
     }
 
     if (!nickname || !password || !confirmPassword) {
-        alert('Заполни все поля');
+        showAuthNotice('Заполни все поля', 'error');
+        if (!nickname) focusAuthField('new-admin-nick');
+        else if (!password) focusAuthField('new-admin-password');
+        else focusAuthField('new-admin-password-confirm');
         return;
     }
     if (nickname.length > 20) {
-        alert('Ник не должен быть длиннее 20 символов');
+        showAuthNotice('Ник не должен быть длиннее 20 символов', 'error');
+        focusAuthField('new-admin-nick');
         return;
     }
     if (password.length < 4) {
-        alert('Пароль должен быть не короче 4 символов');
+        showAuthNotice('Пароль должен быть не короче 4 символов', 'error');
+        focusAuthField('new-admin-password');
         return;
     }
     if (password !== confirmPassword) {
-        alert('Пароли не совпадают');
+        showAuthNotice('Пароли не совпадают', 'error');
+        focusAuthField('new-admin-password-confirm');
         return;
     }
 
@@ -1218,24 +1250,27 @@ async function createStaffAccount() {
     });
     if (!result?.ok) {
         if (result.error === 'invalid_secret') {
-            alert('Неверная секретная фраза');
+            showAuthNotice('Неверная секретная фраза', 'error');
+            focusAuthField('admin-secret-code');
         } else if (result.error === 'secret_not_configured') {
-            alert('На сервере не настроена секретная фраза STAFF_SECRET_CODE');
+            showAuthNotice('На сервере не настроена секретная фраза STAFF_SECRET_CODE', 'error');
         } else if (result.error === 'nickname_taken') {
-            alert('Пользователь с таким ником уже существует');
+            showAuthNotice('Пользователь с таким ником уже существует', 'error');
+            focusAuthField('new-admin-nick');
         } else if (result.error === 'weak_password') {
-            alert('Пароль слишком простой');
+            showAuthNotice('Пароль слишком простой', 'error');
+            focusAuthField('new-admin-password');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди 1 минуту и попробуй снова.');
+            showAuthNotice('Слишком много попыток. Подожди 1 минуту и попробуй снова.', 'error');
         } else if (result.error === 'network_error') {
-            alert('Не удалось связаться с сервером');
+            showAuthNotice('Не удалось связаться с сервером', 'error');
         } else {
-            alert('Ошибка создания аккаунта на сервере');
+            showAuthNotice('Ошибка создания аккаунта на сервере', 'error');
         }
         return;
     }
 
-    alert('Аккаунт состава создан. Выполни вход.');
+    showAuthNotice('Аккаунт состава создан. Выполни вход.', 'success');
     showAdminLogin();
 }
 
@@ -1246,7 +1281,10 @@ async function loginStaff() {
     const secretCode = document.getElementById('staff-login-secret-code')?.value || '';
 
     if (!nickname || !password || !secretCode.trim()) {
-        alert('Введи ник, пароль и секретную фразу');
+        showAuthNotice('Введи ник, пароль и секретную фразу', 'error');
+        if (!nickname) focusAuthField('staff-login-nick');
+        else if (!password) focusAuthField('staff-login-password');
+        else focusAuthField('staff-login-secret-code');
         return;
     }
 
@@ -1258,21 +1296,24 @@ async function loginStaff() {
     });
     if (!result?.ok) {
         if (result.error === 'account_not_found') {
-            alert('Аккаунт состава не найден');
+            showAuthNotice('Аккаунт состава не найден', 'error');
+            focusAuthField('staff-login-nick');
         } else if (result.error === 'invalid_password') {
-            alert('Неверный пароль аккаунта состава');
+            showAuthNotice('Неверный пароль аккаунта состава', 'error');
+            focusAuthField('staff-login-password');
         } else if (result.error === 'invalid_role') {
-            alert('Выбрана неверная роль для этого аккаунта');
+            showAuthNotice('Выбрана неверная роль для этого аккаунта', 'error');
         } else if (result.error === 'invalid_secret') {
-            alert('Неверная секретная фраза');
+            showAuthNotice('Неверная секретная фраза', 'error');
+            focusAuthField('staff-login-secret-code');
         } else if (result.error === 'secret_not_configured') {
-            alert('На сервере не настроена секретная фраза STAFF_SECRET_CODE');
+            showAuthNotice('На сервере не настроена секретная фраза STAFF_SECRET_CODE', 'error');
         } else if (result.error === 'rate_limited') {
-            alert('Слишком много попыток. Подожди 1 минуту и попробуй снова.');
+            showAuthNotice('Слишком много попыток. Подожди 1 минуту и попробуй снова.', 'error');
         } else if (result.error === 'network_error') {
-            alert('Не удалось связаться с сервером для подтверждения роли');
+            showAuthNotice('Не удалось связаться с сервером для подтверждения роли', 'error');
         } else {
-            alert('Ошибка проверки роли состава на сервере');
+            showAuthNotice('Ошибка проверки роли состава на сервере', 'error');
         }
         return;
     }
