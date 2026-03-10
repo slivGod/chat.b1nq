@@ -1732,12 +1732,6 @@ function toggleChatWithKey(e) {
 function autoJoinSideChat() {
     if (savedSideNickname) {
         currentSideUser = savedSideNickname;
-        
-        // РџСЂРѕРІРµСЂСЏРµРј Р°РґРјРёРЅ СЃС‚Р°С‚СѓСЃ
-        if (adminUsers[savedSideNickname]) {
-            localStorage.setItem('isAdmin', 'true');
-        }
-        
         completeRegistration();
     }
 }
@@ -1769,19 +1763,6 @@ function joinSideChat() {
     if (!savedSideNickname) {
         savedSideNickname = nickname;
         localStorage.setItem('chatNickname', nickname);
-        
-        // РџРµСЂРІС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ СЃС‚Р°РЅРѕРІРёС‚СЃСЏ Р°РґРјРёРЅРѕРј
-        if (Object.keys(adminUsers).length === 0) {
-            enableAdminMode();
-            adminUsers[nickname] = {
-                diamonds: 0,
-                messageCount: 0,
-                registered: new Date().toISOString(),
-                isFirstUser: true,
-                role: 'admin'
-            };
-            localStorage.setItem('adminUsers', JSON.stringify(adminUsers));
-        }
     }
     
     currentSideUser = savedSideNickname;
@@ -2131,6 +2112,28 @@ let adminUsers = getStoredObject('adminUsers');
 let currentEditingUser = null;
 let isAdmin = localStorage.getItem('isAdmin') === 'true';
 
+function syncAdminPrivilegeFlag() {
+    const sessionRaw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!sessionRaw) {
+        localStorage.setItem('isAdmin', 'false');
+        isAdmin = false;
+        return false;
+    }
+
+    try {
+        const session = JSON.parse(sessionRaw);
+        const role = String(session?.role || '');
+        const allowedBySession = role === 'admin' || role === 'moderator';
+        localStorage.setItem('isAdmin', String(allowedBySession));
+        isAdmin = allowedBySession;
+        return allowedBySession;
+    } catch (error) {
+        localStorage.setItem('isAdmin', 'false');
+        isAdmin = false;
+        return false;
+    }
+}
+
 function getAdminKeyByNormalized(normalizedNick) {
     return Object.keys(adminUsers).find((nick) => normalizeNick(nick) === normalizedNick) || null;
 }
@@ -2181,9 +2184,11 @@ function syncAdminUsersWithRegisteredAccounts() {
 
 // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ Р°РґРјРёРЅ РїР°РЅРµР»Рё
 function initAdminPanel() {
-    isAdmin = localStorage.getItem('isAdmin') === 'true';
+    syncAdminPrivilegeFlag();
     if (isAdmin) {
         document.getElementById('admin-toggle-btn').style.display = 'block';
+    } else {
+        document.getElementById('admin-toggle-btn').style.display = 'none';
     }
     refreshCooldownSettingUI();
 }
