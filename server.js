@@ -1,12 +1,15 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = __dirname;
 const STAFF_SECRET_CODE = String(process.env.STAFF_SECRET_CODE || '').trim();
+const STAFF_TOKEN_SECRET = String(process.env.STAFF_TOKEN_SECRET || STAFF_SECRET_CODE || '').trim();
+const STAFF_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -129,6 +132,53 @@ function formatDurationMs(ms) {
     if (min < 60) return `${min}m`;
     const hrs = Math.ceil(min / 60);
     return `${hrs}h`;
+}
+
+function base64UrlEncode(input) {
+    return Buffer.from(input).toString('base64url');
+}
+
+function createStaffSessionToken({ nickname, role }) {
+    if (!STAFF_TOKEN_SECRET) return null;
+    const payload = {
+        nickname: String(nickname || '').trim().toLowerCase(),
+        role,
+        exp: Date.now() + STAFF_SESSION_TTL_MS
+    };
+    const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+    const signature = crypto
+        .createHmac('sha256', STAFF_TOKEN_SECRET)
+        .update(encodedPayload)
+        .digest('base64url');
+    return `${encodedPayload}.${signature}`;
+}
+
+function verifyStaffSessionToken(token) {
+    if (!STAFF_TOKEN_SECRET || !token || typeof token !== 'string') return null;
+    const [encodedPayload, signature] = token.split('.');
+    if (!encodedPayload || !signature) return null;
+
+    const expectedSignature = crypto
+        .createHmac('sha256', STAFF_TOKEN_SECRET)
+        .update(encodedPayload)
+        .digest('base64url');
+
+    const expectedBuf = Buffer.from(expectedSignature);
+    const actualBuf = Buffer.from(signature);
+    if (expectedBuf.length !== actualBuf.length) return null;
+    if (!crypto.timingSafeEqual(expectedBuf, actualBuf)) return null;
+
+    try {
+        const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+        if (!payload || typeof payload !== 'object') return null;
+        if (payload.exp <= Date.now()) return null;
+        if (payload.role !== 'admin' && payload.role !== 'moderator') return null;
+        const nickname = String(payload.nickname || '').trim().toLowerCase();
+        if (!nickname) return null;
+        return { nickname, role: payload.role, exp: payload.exp };
+    } catch (error) {
+        return null;
+    }
 }
 
 function decayStrikesIfNeeded(state, now) {
@@ -293,8 +343,9 @@ const server = http.createServer((req, res) => {
     setDefaultSecurityHeaders(res);
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const isStaffSecretApi = requestUrl.pathname === '/api/verify-staff-secret';
+    const isStaffSessionApi = requestUrl.pathname === '/api/staff-session';
 
-    if (isStaffSecretApi && req.method === 'OPTIONS') {
+    if ((isStaffSecretApi || isStaffSessionApi) && req.method === 'OPTIONS') {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -333,6 +384,89 @@ const server = http.createServer((req, res) => {
                     'Access-Control-Allow-Headers': 'Content-Type'
                 });
                 res.end(JSON.stringify({ ok, error }));
+            })
+            .catch(() => {
+                res.writeHead(400, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isStaffSessionApi) {
+        const ip = getClientIp(req);
+        if (isRateLimited(`staff-session:${ip}`, 20, 60_000)) {
+            res.writeHead(429, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            });
+            res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+            return;
+        }
+
+        readJsonBody(req)
+            .then((payload) => {
+                const providedCode = String(payload?.secretCode || '').trim();
+                const nickname = String(payload?.nickname || '').trim().slice(0, 20);
+                const role = String(payload?.role || '').trim();
+                const isStaffRole = role === 'admin' || role === 'moderator';
+
+                if (!nickname || !isStaffRole) {
+                    res.writeHead(400, {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type'
+                    });
+                    res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+                    return;
+                }
+
+                const hasConfiguredSecret = Boolean(STAFF_SECRET_CODE);
+                const secretOk = hasConfiguredSecret && providedCode === STAFF_SECRET_CODE;
+                if (!secretOk) {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type'
+                    });
+                    res.end(JSON.stringify({
+                        ok: false,
+                        error: hasConfiguredSecret ? 'invalid_secret' : 'secret_not_configured'
+                    }));
+                    return;
+                }
+
+                const token = createStaffSessionToken({ nickname, role });
+                if (!token) {
+                    res.writeHead(500, {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type'
+                    });
+                    res.end(JSON.stringify({ ok: false, error: 'token_not_configured' }));
+                    return;
+                }
+
+                res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'
+                });
+                res.end(JSON.stringify({
+                    ok: true,
+                    token,
+                    expiresAt: new Date(Date.now() + STAFF_SESSION_TTL_MS).toISOString()
+                }));
             })
             .catch(() => {
                 res.writeHead(400, {
@@ -406,8 +540,27 @@ wss.on('connection', (ws) => {
         if (payload.type === 'join') {
             const nickname = String(payload.user || '').trim().slice(0, 20);
             const requestedRole = String(payload.role || 'user');
-            const role = requestedRole === 'admin' || requestedRole === 'moderator' ? requestedRole : 'user';
+            const requestedToken = String(payload.staffToken || '').trim();
+            const isRequestedStaffRole = requestedRole === 'admin' || requestedRole === 'moderator';
+            let role = 'user';
             if (!nickname) return;
+
+            if (isRequestedStaffRole) {
+                const tokenPayload = verifyStaffSessionToken(requestedToken);
+                const normalizedNick = nickname.toLowerCase();
+                if (
+                    tokenPayload &&
+                    tokenPayload.role === requestedRole &&
+                    tokenPayload.nickname === normalizedNick
+                ) {
+                    role = requestedRole;
+                } else {
+                    send(ws, {
+                        type: 'system',
+                        text: '[SYSTEM] Staff role verification failed. Connected as user.'
+                    });
+                }
+            }
 
             userData.nickState = getOrCreateModerationState(moderationByNick, nickname);
             const penalty = comparePenalties(checkActivePenalty(userData.nickState), checkActivePenalty(userData.ipState));
