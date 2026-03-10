@@ -234,6 +234,9 @@ function getSmtpTransport() {
             host: SMTP_HOST,
             port: SMTP_PORT,
             secure: SMTP_SECURE,
+            connectionTimeout: 10000,
+            greetingTimeout: 10000,
+            socketTimeout: 15000,
             auth: {
                 user: SMTP_USER,
                 pass: SMTP_PASS
@@ -250,6 +253,7 @@ async function sendMailMessage(to, subject, text) {
         await transport.sendMail({ from: SMTP_FROM, to, subject, text });
         return { ok: true };
     } catch (error) {
+        console.error('SMTP send failed:', error.message);
         return { ok: false, error: 'smtp_send_failed' };
     }
 }

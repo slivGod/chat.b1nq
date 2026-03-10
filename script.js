@@ -784,11 +784,14 @@ function resolveApiEndpoint(pathname) {
 
 async function authApiRequest(endpointPath, payload) {
     const endpoint = resolveApiEndpoint(endpointPath);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     try {
         const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload || {})
+            body: JSON.stringify(payload || {}),
+            signal: controller.signal
         });
         let data = {};
         try {
@@ -798,15 +801,28 @@ async function authApiRequest(endpointPath, payload) {
         }
 
         if (!response.ok) {
+            clearTimeout(timeout);
             return {
                 ok: false,
                 error: data?.error || (response.status === 429 ? 'rate_limited' : 'server_error')
             };
         }
+        clearTimeout(timeout);
         return data;
     } catch (error) {
+        clearTimeout(timeout);
+        if (error?.name === 'AbortError') {
+            return { ok: false, error: 'timeout' };
+        }
         return { ok: false, error: 'network_error' };
     }
+}
+
+function setButtonLoading(buttonId, isLoading, loadingText, idleText) {
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+    button.disabled = isLoading;
+    button.textContent = isLoading ? loadingText : idleText;
 }
 
 function switchAuthForm(formId) {
@@ -898,34 +914,41 @@ function finalizeAuth(nickname, role, authToken = null) {
 }
 
 async function registerUser() {
+    setButtonLoading('user-register-btn', true, 'Идет регистрация...', 'Зарегистрироваться');
     const nickname = (document.getElementById('user-register-nick')?.value || '').trim();
     const email = (document.getElementById('user-register-email')?.value || '').trim();
     const password = document.getElementById('user-register-password')?.value || '';
     const confirmPassword = document.getElementById('user-register-password-confirm')?.value || '';
 
     if (!nickname || !email || !password || !confirmPassword) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         alert('Заполни все поля регистрации');
         return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         alert('Введи корректный email');
         return;
     }
     if (nickname.length > 20) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         alert('Ник не должен быть длиннее 20 символов');
         return;
     }
     if (password.length < 4) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         alert('Пароль должен быть не короче 4 символов');
         return;
     }
     if (password !== confirmPassword) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         alert('Пароли не совпадают');
         return;
     }
 
     const result = await authApiRequest('/api/auth/register-user', { nickname, email, password });
     if (!result?.ok) {
+        setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
         if (result.error === 'nickname_taken') {
             alert('Пользователь с таким ником уже существует');
         } else if (result.error === 'email_taken') {
@@ -936,6 +959,8 @@ async function registerUser() {
             alert('На сервере не настроена почта (SMTP). Обратись к администратору.');
         } else if (result.error === 'smtp_send_failed') {
             alert('Не удалось отправить письмо с кодом. Попробуй позже.');
+        } else if (result.error === 'timeout') {
+            alert('Сервер слишком долго отвечает. Проверь Render и SMTP, затем попробуй снова.');
         } else if (result.error === 'weak_password') {
             alert('Пароль слишком простой');
         } else if (result.error === 'rate_limited') {
@@ -948,6 +973,7 @@ async function registerUser() {
         return;
     }
 
+    setButtonLoading('user-register-btn', false, 'Идет регистрация...', 'Зарегистрироваться');
     document.getElementById('user-verify-nick').value = result.nickname || nickname;
     document.getElementById('user-verify-email').value = result.email || email;
     document.getElementById('user-verify-code').value = '';
@@ -2595,5 +2621,4 @@ document.addEventListener('click', (e) => {
         closeAdminEditModal();
     }
 });
-
 
