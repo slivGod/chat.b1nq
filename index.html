@@ -208,6 +208,34 @@
         </div>
     </div>
 
+    <section class="dashboard-hero">
+        <div class="hero-copy">
+            <span class="hero-kicker">Личный кабинет</span>
+            <h1>Профиль, чат и управление сайтом в одном месте</h1>
+            <p>Следи за временем, общайся в чате, запускай мини-игру и управляй аккаунтом без лишних экранов.</p>
+            <div class="hero-actions">
+                <button class="hero-btn primary" onclick="openChat()">Открыть чат</button>
+                <button class="hero-btn secondary" onclick="openShop()">Открыть магазин</button>
+                <button class="hero-btn tertiary" onclick="toggleGame(true)">Мини-игра</button>
+            </div>
+        </div>
+        <div class="hero-summary">
+            <div class="hero-stat-card">
+                <span class="hero-stat-label">Текущий ник</span>
+                <strong id="hero-profile-display-nick">xss.b1nq</strong>
+            </div>
+            <div class="hero-stat-card">
+                <span class="hero-stat-label">Статус</span>
+                <strong>Сайт активен</strong>
+            </div>
+            <div class="hero-stat-card">
+                <span class="hero-stat-label">Онлайн чат</span>
+                <strong>Подключение по WebSocket</strong>
+            </div>
+        </div>
+    </section>
+
+    <div class="dashboard-shell">
     <main class="tg-app">
         <div class="tg-header">
             <div class="avatar-main">XB</div>
@@ -258,6 +286,29 @@
             </div>
         </div>
     </main>
+    <aside class="dashboard-side-card">
+        <div class="dashboard-side-card-header">
+            <span>Быстрый доступ</span>
+            <strong>Навигация</strong>
+        </div>
+        <button class="dashboard-shortcut" onclick="toggleSocialList()">
+            <span>Соцсети</span>
+            <small>Telegram и Instagram</small>
+        </button>
+        <button class="dashboard-shortcut" onclick="openChat()">
+            <span>Чат</span>
+            <small>Открыть боковой онлайн-чат</small>
+        </button>
+        <button class="dashboard-shortcut" onclick="openShop()">
+            <span>Магазин</span>
+            <small>Проверить алмазы и услуги</small>
+        </button>
+        <button class="dashboard-shortcut" onclick="toggleGame(true)">
+            <span>Мини-игра</span>
+            <small>Быстрый запуск прямо с главной</small>
+        </button>
+    </aside>
+    </div>
 
     <div id="game-overlay">
         <div class="game-window">

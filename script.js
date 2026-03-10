@@ -93,6 +93,7 @@ let backgroundParticles = [];
 let gridLines = [];
 let glowOrbs = [];
 let currentTheme = 'dark';
+let serverAdminMembersCache = { users: [], staff: [] };
 
 const themeColors = {
     light: { star: '#FFD700', meteor: '#FF6B6B' },
@@ -903,8 +904,13 @@ function showAuthScreen() {
 
 function updateHeaderNickname(nickname) {
     const headerNick = document.getElementById('profile-display-nick');
-    if (!headerNick) return;
-    headerNick.textContent = nickname || 'xss.b1nq';
+    if (headerNick) {
+        headerNick.textContent = nickname || 'xss.b1nq';
+    }
+    const heroNick = document.getElementById('hero-profile-display-nick');
+    if (heroNick) {
+        heroNick.textContent = nickname || 'xss.b1nq';
+    }
 }
 
 function persistSession(nickname, role, authToken = null) {
@@ -1792,6 +1798,22 @@ function getCurrentSessionAuthToken() {
     }
 }
 
+async function fetchAdminAccounts() {
+    const token = getCurrentSessionAuthToken();
+    const result = await authApiRequest('/api/admin/list-accounts', { token });
+    if (!result?.ok) {
+        if (result?.error === 'forbidden') {
+            showAuthNotice('Сервер отклонил доступ к списку аккаунтов. Перезайди как состав.', 'error');
+        }
+        return null;
+    }
+    serverAdminMembersCache = {
+        users: Array.isArray(result.users) ? result.users : [],
+        staff: Array.isArray(result.staff) ? result.staff : []
+    };
+    return serverAdminMembersCache;
+}
+
 function updateSideUserInfo() {
     const userInfo = document.getElementById('side-user-info');
     if (!userInfo || !currentSideUser) return;
@@ -2483,31 +2505,41 @@ function switchAdminTab(tabName) {
 }
 
 // Р—Р°РіСЂСѓР·РёС‚СЊ СЃРїРёСЃРѕРє СѓС‡Р°СЃС‚РЅРёРєРѕРІ
-function loadAdminMembers() {
+async function loadAdminMembers() {
     const list = document.getElementById('admin-members-list');
     if (!list) return;
-    syncAdminUsersWithRegisteredAccounts();
+    list.innerHTML = '<div class="admin-empty-state">Загружаю серверные аккаунты...</div>';
 
-    list.innerHTML = '';
-
-    if (Object.keys(adminUsers).length === 0) {
-        list.innerHTML = '<div style="text-align: center; color: var(--hint); padding: 20px;">Нет участников</div>';
+    const accounts = await fetchAdminAccounts();
+    if (!accounts) {
+        list.innerHTML = '<div class="admin-empty-state">Не удалось загрузить список аккаунтов</div>';
         return;
     }
 
-    const members = Object.entries(adminUsers)
-        .sort(([nickA], [nickB]) => nickA.localeCompare(nickB, 'ru'));
+    const members = [...accounts.users];
+    if (members.length === 0) {
+        list.innerHTML = '<div class="admin-empty-state">На сервере пока нет пользовательских аккаунтов</div>';
+        return;
+    }
 
-    members.forEach(([nickname, userData]) => {
+    list.innerHTML = '';
+
+    members.forEach((userData) => {
+        const nickname = userData.nickname;
         const itemEl = document.createElement('div');
         itemEl.className = 'admin-member-item';
         itemEl.innerHTML = `
             <div class="admin-member-info">
-                <div class="admin-member-name">${nickname}</div>
-                <div class="admin-member-diamonds">💎 ${userData.diamonds || 0}</div>
+                <div class="admin-member-name-row">
+                    <div class="admin-member-name">${nickname}</div>
+                    <span class="admin-member-role role-${userData.role || 'user'}">${userData.role || 'user'}</span>
+                </div>
+                <div class="admin-member-diamonds">${userData.email || 'Email не указан'}</div>
+                <div class="admin-member-meta">${userData.emailVerified ? 'Email подтвержден' : 'Email не подтвержден'}</div>
             </div>
             <div class="admin-member-actions">
                 <button class="admin-btn-edit" onclick="editAdminMember('${nickname}')">✏️ Редактировать</button>
+                <button class="admin-btn-delete-account" onclick="deleteServerAccount('${nickname}')">Удалить аккаунт</button>
             </div>
         `;
         list.appendChild(itemEl);
@@ -2534,7 +2566,7 @@ function filterAdminMembers() {
 // Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ СѓС‡Р°СЃС‚РЅРёРєР°
 function editAdminMember(nickname) {
     currentEditingUser = nickname;
-    const userData = adminUsers[nickname];
+    const userData = adminUsers[nickname] || { diamonds: 0 };
 
     document.getElementById('admin-edit-nick').value = nickname;
     document.getElementById('admin-edit-diamonds').value = userData.diamonds || 0;
@@ -2610,12 +2642,42 @@ async function deleteAdminMember() {
     updateAdminStats();
 }
 
+async function deleteServerAccount(nickname) {
+    if (!nickname) return;
+    if (!syncAdminPrivilegeFlag()) {
+        alert('Удалять аккаунты может только admin');
+        return;
+    }
+
+    const approved = await showConfirmPopup(`Удалить аккаунт "${nickname}" с сайта? Это действие необратимо.`, 'УДАЛЕНИЕ АККАУНТА');
+    if (!approved) return;
+
+    const token = getCurrentSessionAuthToken();
+    const result = await authApiRequest('/api/admin/delete-user', { token, nickname });
+    if (!result?.ok) {
+        if (result.error === 'forbidden') {
+            alert('Удаление доступно только роли admin');
+        } else if (result.error === 'account_not_found') {
+            alert('Аккаунт уже удален или не найден');
+        } else {
+            alert('Не удалось удалить аккаунт с сервера');
+        }
+        return;
+    }
+
+    delete adminUsers[nickname];
+    localStorage.setItem('adminUsers', JSON.stringify(adminUsers));
+    await loadAdminMembers();
+    updateAdminStats();
+    alert(`Аккаунт "${nickname}" удален с сайта`);
+}
+
 // РћР±РЅРѕРІРёС‚СЊ СЃС‚Р°С‚РёСЃС‚РёРєСѓ
 function updateAdminStats() {
     syncAdminUsersWithRegisteredAccounts();
 
     const users = Object.entries(adminUsers);
-    const totalMembers = users.length;
+    const totalMembers = serverAdminMembersCache.users.length || users.length;
     let totalDiamonds = 0;
     let totalMessages = 0;
 

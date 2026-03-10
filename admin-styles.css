@@ -458,3 +458,106 @@
 .btn-cancel:hover {
     background: rgba(0, 0, 0, 0.2);
 }
+
+.admin-member-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.admin-member-role {
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.admin-member-role.role-user {
+    background: rgba(82, 183, 82, 0.12);
+    border-color: rgba(82, 183, 82, 0.35);
+}
+
+.admin-member-role.role-admin {
+    background: rgba(255, 107, 107, 0.12);
+    border-color: rgba(255, 107, 107, 0.35);
+}
+
+.admin-member-role.role-moderator {
+    background: rgba(82, 183, 232, 0.12);
+    border-color: rgba(82, 183, 232, 0.35);
+}
+
+.admin-member-meta {
+    font-size: 0.78rem;
+    color: var(--hint);
+    margin-top: 4px;
+}
+
+.admin-btn-delete-account {
+    padding: 6px 12px;
+    background: rgba(204, 58, 58, 0.16);
+    border: 1px solid rgba(204, 58, 58, 0.45);
+    border-radius: 6px;
+    color: #ff8e8e;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.admin-btn-delete-account:hover {
+    background: rgba(204, 58, 58, 0.28);
+    transform: translateY(-2px);
+}
+
+body.theme-light .admin-panel {
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 18px 45px rgba(31, 61, 115, 0.18);
+}
+
+body.theme-light .admin-header {
+    background: linear-gradient(135deg, rgba(11, 110, 253, 0.08), rgba(69, 162, 255, 0.1));
+}
+
+body.theme-light .admin-member-item,
+body.theme-light .stat-box,
+body.theme-light .setting-item input,
+body.theme-light .admin-search input,
+body.theme-light .admin-edit-content {
+    background: rgba(245, 249, 255, 0.92);
+}
+
+body.theme-dark .admin-panel {
+    background: rgba(17, 26, 41, 0.9);
+}
+
+body.theme-dark .admin-header {
+    background: linear-gradient(135deg, rgba(72, 178, 255, 0.1), rgba(33, 76, 132, 0.08));
+}
+
+body.theme-neon .admin-panel {
+    background: rgba(20, 4, 38, 0.92);
+    border-color: rgba(145, 0, 255, 0.34);
+    box-shadow: 0 18px 55px rgba(176, 0, 255, 0.22);
+}
+
+body.theme-neon .admin-header {
+    background: linear-gradient(135deg, rgba(255, 0, 212, 0.14), rgba(0, 229, 255, 0.1));
+}
+
+body.theme-neon .admin-tab-btn.active {
+    background: rgba(0, 247, 255, 0.08);
+    border-bottom-color: #00f7ff;
+    color: #00f7ff;
+}
+
+body.theme-neon .admin-member-item:hover,
+body.theme-neon .admin-search input:focus,
+body.theme-neon .form-group input:focus {
+    border-color: #00f7ff;
+    box-shadow: 0 0 0 1px rgba(0, 247, 255, 0.2);
+}

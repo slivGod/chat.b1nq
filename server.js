@@ -560,8 +560,10 @@ const server = http.createServer((req, res) => {
     const isAuthResendVerifyCodeApi = requestUrl.pathname === '/api/auth/resend-verify-code';
     const isAuthRequestPasswordResetApi = requestUrl.pathname === '/api/auth/request-password-reset';
     const isAuthConfirmPasswordResetApi = requestUrl.pathname === '/api/auth/confirm-password-reset';
+    const isAdminListAccountsApi = requestUrl.pathname === '/api/admin/list-accounts';
     const isAdminExportAccountsApi = requestUrl.pathname === '/api/admin/export-accounts';
     const isAdminImportAccountsApi = requestUrl.pathname === '/api/admin/import-accounts';
+    const isAdminDeleteUserApi = requestUrl.pathname === '/api/admin/delete-user';
     const isAnyApi = isStaffSecretApi
         || isStaffSessionApi
         || isAuthRegisterUserApi
@@ -573,8 +575,10 @@ const server = http.createServer((req, res) => {
         || isAuthResendVerifyCodeApi
         || isAuthRequestPasswordResetApi
         || isAuthConfirmPasswordResetApi
+        || isAdminListAccountsApi
         || isAdminExportAccountsApi
-        || isAdminImportAccountsApi;
+        || isAdminImportAccountsApi
+        || isAdminDeleteUserApi;
 
     if (isAnyApi && req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -1236,6 +1240,45 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    if (req.method === 'POST' && isAdminListAccountsApi) {
+        readJsonBody(req)
+            .then((payload) => {
+                const token = String(payload?.token || '').trim();
+                const verified = verifyAuthToken(token);
+                if (!verified || (verified.role !== 'admin' && verified.role !== 'moderator')) {
+                    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+                    return;
+                }
+
+                const users = Object.values(accountsStore.users)
+                    .map((account) => ({
+                        nickname: account.nickname,
+                        role: account.role || 'user',
+                        email: account.email || '',
+                        emailVerified: Boolean(account.emailVerified),
+                        registered: account.registered || null
+                    }))
+                    .sort((a, b) => a.nickname.localeCompare(b.nickname, 'ru'));
+
+                const staff = Object.values(accountsStore.staff)
+                    .map((account) => ({
+                        nickname: account.nickname,
+                        role: account.role || 'moderator',
+                        registered: account.registered || null
+                    }))
+                    .sort((a, b) => a.nickname.localeCompare(b.nickname, 'ru'));
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true, users, staff }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
     if (req.method === 'POST' && isAdminExportAccountsApi) {
         readJsonBody(req)
             .then((payload) => {
@@ -1282,6 +1325,39 @@ const server = http.createServer((req, res) => {
                 accountsStore.staff = data.staff;
                 saveAccountsStore();
                 createAccountsBackup('after-import');
+
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: true }));
+            })
+            .catch(() => {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                res.end(JSON.stringify({ ok: false, error: 'bad_request' }));
+            });
+        return;
+    }
+
+    if (req.method === 'POST' && isAdminDeleteUserApi) {
+        readJsonBody(req)
+            .then((payload) => {
+                const token = String(payload?.token || '').trim();
+                const nickname = String(payload?.nickname || '').trim();
+                const verified = verifyAuthToken(token);
+                if (!verified || verified.role !== 'admin') {
+                    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+                    return;
+                }
+
+                const normalized = normalizeNick(nickname);
+                if (!accountsStore.users[normalized]) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ ok: false, error: 'account_not_found' }));
+                    return;
+                }
+
+                delete accountsStore.users[normalized];
+                saveAccountsStore();
+                createAccountsBackup('after-delete-user');
 
                 res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
                 res.end(JSON.stringify({ ok: true }));
